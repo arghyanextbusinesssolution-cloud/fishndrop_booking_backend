@@ -214,7 +214,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
     return;
   }
 
-  let event: Stripe.Event;
+  let event;
 
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
