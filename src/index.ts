@@ -41,7 +41,7 @@ const parsedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 const allowedOrigins =
-  parsedOrigins.length > 0 ? parsedOrigins : ["http://localhost:3000", "http://localhost:3001","https://fishndrop.nextbusinesssolution.com/"];
+  parsedOrigins.length > 0 ? parsedOrigins : ["http://localhost:3000", "http://localhost:3001","https://fishndrop.nextbusinesssolution.com"];
 
 const corsOptions: CorsOptions = {
   origin: allowedOrigins,
