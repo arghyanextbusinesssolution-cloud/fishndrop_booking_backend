@@ -1,7 +1,7 @@
 import { body } from "express-validator";
 
 export const createBookingValidator = [
-  body("partySize").isInt({ min: 2 }).withMessage("Party size must be at least 2"),
+  body("partySize").isInt({ min: 2, max: 8 }).withMessage("Party size must be between 2 and 8"),
   body("bookingDate")
     .isISO8601()
     .withMessage("Booking date must be a valid ISO date")
@@ -17,8 +17,8 @@ export const createBookingValidator = [
   body("customerEmail").isEmail().withMessage("Valid email is required"),
   body("customerPhone").isString().trim().isLength({ min: 7, max: 20 }).withMessage("Valid phone is required"),
   body("occasion")
-    .isIn(["birthday", "anniversary", "graduation", "other"])
-    .withMessage("Occasion must be birthday, anniversary, graduation, or other"),
+    .isIn(["birthday", "anniversary", "business", "quiet", "graduation", "other"])
+    .withMessage("Occasion must be birthday, anniversary, business, quiet, graduation, or other"),
   body("notes").optional().isString().trim().isLength({ max: 500 }).withMessage("Notes must be up to 500 characters"),
   body("cakeDetails")
     .optional()

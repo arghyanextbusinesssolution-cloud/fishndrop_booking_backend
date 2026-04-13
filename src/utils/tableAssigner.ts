@@ -1,73 +1,95 @@
 import Table, { ITable } from "../models/Table";
+import DailyTableLock from "../models/DailyTableLock";
 
 interface AssignResult {
   tables: ITable[];
   totalAmount: number;
   complimentaryDrinks: number;
   error?: string;
+  code?: string;
 }
 
 const PRICE_PER_PERSON = 40;
+const NO_TABLE_ERROR = "Sir for this time and date no table is available";
 
-const assignTables = async (partySize: number, blockedTableIds: string[] = []): Promise<AssignResult> => {
-  if (partySize === 1) {
-    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "Single person bookings are not allowed" };
-  }
-
+const assignTables = async (
+  partySize: number,
+  bookingDate: string,
+  blockedTableIds: string[] = [],
+  allowSplit: boolean = false
+): Promise<AssignResult> => {
+  // Rule: 1 person not allowed (min 2)
   if (partySize < 2) {
-    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "Party size must be at least 2" };
+    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "Minimum 2 guests required for online booking" };
   }
+
+  if (partySize > 8) {
+    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "Our online system supports up to 8 guests. For larger parties, please contact us." };
+  }
+
+  const start = new Date(bookingDate);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(bookingDate);
+  end.setHours(23, 59, 59, 999);
+
+  const dailyLocks = await DailyTableLock.find({
+    date: { $gte: start, $lte: end },
+    isLocked: true
+  });
+  const lockedTableIds = dailyLocks.map(l => l.table.toString());
 
   const availableTables = await Table.find({
-    isAvailable: true,
-    _id: { $nin: blockedTableIds }
+    isAvailable: true, // Master lock must be open
+    _id: { $nin: [...blockedTableIds, ...lockedTableIds] }
   })
     .sort({ tableNumber: 1 })
     .lean<ITable[]>();
 
-  const tableCount = availableTables.length;
-  if (tableCount === 0) {
-    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "No available tables for this slot" };
-  }
+  const twoSeaters = availableTables.filter((t) => t.capacity === 2);
+  const fourSeaters = availableTables.filter((t) => t.capacity === 4);
 
-  let selected: ITable[] | null = null;
-  let bestWaste = Number.POSITIVE_INFINITY;
-  let bestTablesUsed = Number.POSITIVE_INFINITY;
+  let selected: ITable[] = [];
 
-  for (let mask = 1; mask < 1 << tableCount; mask += 1) {
-    const subset: ITable[] = [];
-    let baseCapacity = 0;
-    let hasFourSeater = false;
-    for (let index = 0; index < tableCount; index += 1) {
-      if ((mask & (1 << index)) !== 0) {
-        const table = availableTables[index];
-        subset.push(table);
-        baseCapacity += table.capacity;
-        if (table.capacity === 4) {
-          hasFourSeater = true;
-        }
+  switch (partySize) {
+    case 2:
+      // Rule: 2 person two seater table
+      if (twoSeaters.length >= 1) {
+        selected = [twoSeaters[0]];
       }
-    }
+      break;
 
-    // Business rule: allow one extra chair if at least one 4-seater exists.
-    const effectiveCapacity = baseCapacity + (hasFourSeater ? 1 : 0);
-    if (effectiveCapacity < partySize) {
-      continue;
-    }
+    case 3:
+    case 4:
+    case 5:
+      // Rule: 3/4 person four seater. 5 person also uses four seater (with extra chair consent on frontend)
+      if (fourSeaters.length >= 1) {
+        selected = [fourSeaters[0]];
+      }
+      break;
 
-    const waste = effectiveCapacity - partySize;
-    const usesFewerTables = subset.length < bestTablesUsed;
-    const betterWaste = waste < bestWaste;
+    case 6:
+      // Rule: 6 persona thjen 4 seater one and two seater one
+      if (fourSeaters.length >= 1 && twoSeaters.length >= 1) {
+        selected = [fourSeaters[0], twoSeaters[0]];
+      }
+      break;
 
-    if (betterWaste || (waste === bestWaste && usesFewerTables)) {
-      selected = subset;
-      bestWaste = waste;
-      bestTablesUsed = subset.length;
-    }
+    case 7:
+    case 8:
+      // Rule: 7/8 person two four seater
+      if (fourSeaters.length >= 2) {
+        selected = [fourSeaters[0], fourSeaters[1]];
+      }
+      break;
   }
 
-  if (!selected) {
-    return { tables: [], totalAmount: 0, complimentaryDrinks: 0, error: "No suitable tables available for this party size" };
+  if (selected.length === 0) {
+    return { 
+      tables: [], 
+      totalAmount: 0, 
+      complimentaryDrinks: 0, 
+      error: NO_TABLE_ERROR 
+    };
   }
 
   return {

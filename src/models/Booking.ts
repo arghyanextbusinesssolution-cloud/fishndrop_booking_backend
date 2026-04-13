@@ -9,8 +9,18 @@ export interface IBooking extends Document {
   customerPhone: string;
   notes?: string;
   occasion: "birthday" | "anniversary" | "graduation" | "other";
-  cakeDetails?: string;
-  cakePrice?: number;
+  cakeDetails?: string; // Legacy
+  cakePrice?: number; // Legacy
+  customCakeDetails?: {
+    size: string;
+    flavor: string;
+    type: string;
+    designStyle: string[];
+    message: string;
+    specialInstructions: string;
+    referencePhotoUrl: string;
+    retailPrice: number;
+  };
   totalAmount: number;
   complimentaryDrinks: number;
   bookingDate: Date;
@@ -30,8 +40,18 @@ const bookingSchema = new Schema<IBooking>(
     customerPhone: { type: String, required: true, trim: true, maxlength: 20 },
     notes: { type: String, trim: true, maxlength: 500 },
     occasion: { type: String, enum: ["birthday", "anniversary", "graduation", "other"], required: true },
-    cakeDetails: { type: String, trim: true, maxlength: 500 },
-    cakePrice: { type: Number, min: 0, default: 0 },
+    cakeDetails: { type: String, trim: true, maxlength: 500 }, // Legacy
+    cakePrice: { type: Number, min: 0, default: 0 }, // Legacy
+    customCakeDetails: {
+      size: String,
+      flavor: String,
+      type: { type: String },
+      designStyle: [{ type: String }],
+      message: String,
+      specialInstructions: String,
+      referencePhotoUrl: String,
+      retailPrice: Number
+    },
     totalAmount: { type: Number, required: true },
     complimentaryDrinks: { type: Number, default: 0 },
     bookingDate: { type: Date, required: true },

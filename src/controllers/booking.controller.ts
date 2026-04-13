@@ -14,10 +14,11 @@ const TIME_SLOTS = ["18:00", "19:00", "20:00", "21:00"];
 
 const buildDayRange = (inputDate: string) => {
   const parsedDate = new Date(inputDate);
+  // Ensure we are working with UTC midnight to match MongoDB storage
   const dayStart = new Date(parsedDate);
-  dayStart.setHours(0, 0, 0, 0);
+  dayStart.setUTCHours(0, 0, 0, 0);
   const dayEnd = new Date(parsedDate);
-  dayEnd.setHours(23, 59, 59, 999);
+  dayEnd.setUTCHours(23, 59, 59, 999);
   return { parsedDate, dayStart, dayEnd };
 };
 
@@ -34,6 +35,8 @@ const reserveTablesAndCreateBooking = async (
     occasion: "birthday" | "anniversary" | "graduation" | "other";
     cakeDetails: string;
     cakePrice: number;
+    customCakeDetails?: any;
+    allowSplit?: boolean;
   }
 ) => {
   const { parsedDate, dayStart, dayEnd } = buildDayRange(payload.bookingDate);
@@ -52,7 +55,7 @@ const reserveTablesAndCreateBooking = async (
     status: "confirmed"
   }).select("tables");
   const blockedTableIds = occupiedBookings.flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
-  const assignment = await assignTables(payload.partySize, blockedTableIds);
+  const assignment = await assignTables(payload.partySize, payload.bookingDate, blockedTableIds, payload.allowSplit);
   if (assignment.error) {
     return { error: assignment.error };
   }
@@ -67,11 +70,13 @@ const reserveTablesAndCreateBooking = async (
     notes: payload.notes,
     occasion: payload.occasion,
     cakeDetails: payload.cakeDetails,
+    customCakeDetails: payload.customCakeDetails,
     cakePrice: payload.cakePrice,
     totalAmount: assignment.totalAmount + payload.cakePrice,
     complimentaryDrinks: assignment.complimentaryDrinks,
     bookingDate: parsedDate,
-    bookingTime: payload.bookingTime
+    bookingTime: payload.bookingTime,
+    paymentStatus: "paid"
   });
 
   return { booking };
@@ -88,6 +93,7 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
     const notes = sanitizeString(req.body.notes);
     const occasion = sanitizeString(req.body.occasion) as "birthday" | "anniversary" | "graduation" | "other";
     const cakeDetails = sanitizeString(req.body.cakeDetails);
+    const customCakeDetails = req.body.customCakeDetails;
     const cakePrice = Number(req.body.cakePrice || 0);
 
     const result = await reserveTablesAndCreateBooking({
@@ -101,15 +107,18 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       notes,
       occasion,
       cakeDetails,
-      cakePrice
+      customCakeDetails,
+      cakePrice,
+      allowSplit: req.body.allowSplit === true
     });
     if (result.error || !result.booking) {
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
       return;
     }
     res.status(201).json({ success: true, booking: result.booking });
-  } catch (error) {
-    next(new Error("Booking creation failed"));
+  } catch (error: any) {
+    console.error("[Booking Create Error]:", error);
+    next(new Error(`Booking creation failed: ${error.message}`));
   }
 };
 
@@ -126,25 +135,45 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
     const notes = sanitizeString(req.body.notes);
     const occasion = sanitizeString(req.body.occasion) as "birthday" | "anniversary" | "graduation" | "other";
     const cakeDetails = sanitizeString(req.body.cakeDetails);
+    const customCakeDetails = req.body.customCakeDetails;
     const cakePrice = Number(req.body.cakePrice || 0);
+    const allowSplit = req.body.allowSplit === true;
+
+    // Check if user is already authenticated (via token)
+    let authenticatedUser = null;
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      try {
+        const token = authHeader.split(" ")[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+        authenticatedUser = await User.findById(decoded.id).select("+password");
+      } catch (err) {
+        // Token invalid, ignore and proceed as guest
+      }
+    }
 
     let user = await User.findOne({ email }).select("+password");
     let accountCreated = false;
+
+    // If user exists and is authenticated as THAT user, skip password check
+    const isSelfBooking = authenticatedUser && user && authenticatedUser._id.toString() === user._id.toString();
+
     if (!user) {
       const rawPassword = password || `Auto@${Math.floor(100000 + Math.random() * 900000)}`;
       user = await User.create({ name, email, password: rawPassword, phone, role: "user" });
       user = await User.findById(user._id).select("+password");
       accountCreated = true;
-    } else {
+    } else if (!isSelfBooking) {
       if (!password || !(await user.comparePassword(password))) {
         res.status(409).json({ success: false, message: "Account exists. Please login with password to continue." });
         return;
       }
-      // Update phone if missing
-      if (!user.phone && phone) {
-        user.phone = phone;
-        await user.save();
-      }
+    }
+
+    // Update phone if missing
+    if (user && !user.phone && phone) {
+      user.phone = phone;
+      await user.save();
     }
 
     const result = await reserveTablesAndCreateBooking({
@@ -158,7 +187,9 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       notes,
       occasion,
       cakeDetails,
-      cakePrice
+      customCakeDetails,
+      cakePrice,
+      allowSplit
     });
     if (result.error || !result.booking) {
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
@@ -173,8 +204,9 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       token,
       user: { id: user!._id, name: user!.name, email: user!.email, phone: user!.phone, role: user!.role }
     });
-  } catch (error) {
-    next(new Error("Booking with account creation failed"));
+  } catch (error: any) {
+    console.error("[Booking Create Error]:", error);
+    next(new Error(`Booking with account creation failed: ${error.message}`));
   }
 };
 
@@ -254,19 +286,11 @@ export const getAvailability = async (req: Request, res: Response, next: NextFun
   try {
     const date = sanitizeString(req.query.date);
     const slot = sanitizeString(req.query.slot);
+    const allowSplit = req.query.allowSplit === "true";
     const parsedPartySize = Number(req.query.partySize);
     const partySize = Number.isFinite(parsedPartySize) && parsedPartySize >= 2 ? parsedPartySize : 2;
-    const parsedDate = new Date(date);
-
-    if (!date || Number.isNaN(parsedDate.getTime())) {
-      res.status(400).json({ success: false, message: "Valid date is required" });
-      return;
-    }
-
-    const dayStart = new Date(parsedDate);
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(parsedDate);
-    dayEnd.setHours(23, 59, 59, 999);
+    
+    const { dayStart, dayEnd } = buildDayRange(date);
 
     const [allTables, lockedTables] = await Promise.all([
       Table.find().sort({ tableNumber: 1 }),
@@ -297,7 +321,7 @@ export const getAvailability = async (req: Request, res: Response, next: NextFun
           status: "confirmed"
         }).select("tables");
         const bookedTableIds = occupied.flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
-        const assignment = await assignTables(partySize, bookedTableIds);
+        const assignment = await assignTables(partySize, date, bookedTableIds, allowSplit);
         return {
           slot: timeSlot,
           isAvailable: !assignment.error,
