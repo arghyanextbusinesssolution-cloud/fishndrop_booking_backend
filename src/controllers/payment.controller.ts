@@ -5,6 +5,7 @@ import Stripe from "stripe";
 import { loadEnvFiles } from "../config/loadEnv";
 import Booking from "../models/Booking";
 import logger from "../config/logger";
+import { sendPaymentEmails } from "../utils/email.utils";
 
 /** Keys copied from Stripe docs — they are not real and will not work with the API. */
 const INVALID_PLACEHOLDER_SECRETS = new Set([
@@ -196,6 +197,9 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
     booking.paymentStatus = "paid";
     await booking.save();
 
+    // Send confirmation emails
+    void sendPaymentEmails(booking);
+
     const updated = await Booking.findById(bookingId).populate("tables");
     res.status(200).json({ success: true, booking: updated });
   } catch (error) {
@@ -237,6 +241,9 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
             booking.paymentStatus = "paid";
             await booking.save();
             logger.info(`Booking ${bookingId} marked as paid via webhook.`);
+            
+            // Send confirmation emails
+            void sendPaymentEmails(booking);
           }
         } catch (dbErr: any) {
           logger.error(`Failed to update booking ${bookingId} via webhook.`, { error: dbErr.message });
