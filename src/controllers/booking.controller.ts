@@ -22,6 +22,17 @@ const buildDayRange = (inputDate: string) => {
   return { parsedDate, dayStart, dayEnd };
 };
 
+const timeToMinutes = (time: string): number => {
+  const [hours, minutes] = time.split(":").map(Number);
+  return hours * 60 + minutes;
+};
+
+const isOverlapping = (timeA: string, timeB: string, durationMinutes: number = 120): boolean => {
+  const minsA = timeToMinutes(timeA);
+  const minsB = timeToMinutes(timeB);
+  return Math.abs(minsA - minsB) < durationMinutes;
+};
+
 const reserveTablesAndCreateBooking = async (
   payload: {
     userId: mongoose.Types.ObjectId;
@@ -51,10 +62,13 @@ const reserveTablesAndCreateBooking = async (
 
   const occupiedBookings = await Booking.find({
     bookingDate: { $gte: dayStart, $lte: dayEnd },
-    bookingTime: payload.bookingTime,
     status: "confirmed"
-  }).select("tables");
-  const blockedTableIds = occupiedBookings.flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
+  }).select("tables bookingTime");
+
+  const blockedTableIds = occupiedBookings
+    .filter((b) => isOverlapping(b.bookingTime, payload.bookingTime))
+    .flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
+
   const assignment = await assignTables(payload.partySize, payload.bookingDate, blockedTableIds, payload.allowSplit);
   if (assignment.error) {
     return { error: assignment.error };
@@ -303,6 +317,11 @@ export const getAvailability = async (req: Request, res: Response, next: NextFun
       isLocked: true
     });
 
+    const bookingsForDay = await Booking.find({
+      bookingDate: { $gte: dayStart, $lte: dayEnd },
+      status: "confirmed"
+    }).select("tables bookingTime");
+
     const slots = await Promise.all(
       TIME_SLOTS.map(async (timeSlot) => {
         const locked = slotLocks.find((lock) => lock.bookingTime === timeSlot);
@@ -315,12 +334,11 @@ export const getAvailability = async (req: Request, res: Response, next: NextFun
             bookedTableIds: []
           };
         }
-        const occupied = await Booking.find({
-          bookingDate: { $gte: dayStart, $lte: dayEnd },
-          bookingTime: timeSlot,
-          status: "confirmed"
-        }).select("tables");
-        const bookedTableIds = occupied.flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
+        
+        const bookedTableIds = bookingsForDay
+          .filter((b) => isOverlapping(b.bookingTime, timeSlot))
+          .flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
+
         const assignment = await assignTables(partySize, date, bookedTableIds, allowSplit);
         return {
           slot: timeSlot,
