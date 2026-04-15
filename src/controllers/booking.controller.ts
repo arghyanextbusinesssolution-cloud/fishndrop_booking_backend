@@ -6,11 +6,12 @@ import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
 import User from "../models/User";
 import assignTables from "../utils/tableAssigner";
+import { sendPaymentEmails } from "../utils/email.utils";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
 
-const TIME_SLOTS = ["18:00", "19:00", "20:00", "21:00"];
+const TIME_SLOTS = ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"];
 
 const buildDayRange = (inputDate: string) => {
   const parsedDate = new Date(inputDate);
@@ -129,6 +130,9 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
       return;
     }
+
+    void sendPaymentEmails(result.booking as any);
+
     res.status(201).json({ success: true, booking: result.booking });
   } catch (error: any) {
     console.error("[Booking Create Error]:", error);
@@ -209,6 +213,8 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
       return;
     }
+
+    void sendPaymentEmails(result.booking as any);
 
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
     res.status(201).json({
