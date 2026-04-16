@@ -142,9 +142,9 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
 
 export const createBookingWithAccount = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const name = sanitizeString(req.body.customerName);
-    const email = sanitizeString(req.body.customerEmail).toLowerCase();
-    const phone = sanitizeString(req.body.customerPhone);
+    let name = sanitizeString(req.body.customerName);
+    let email = sanitizeString(req.body.customerEmail).toLowerCase();
+    let phone = sanitizeString(req.body.customerPhone);
     const password = sanitizeString(req.body.password);
 
     const partySize = Number(req.body.partySize);
@@ -170,21 +170,27 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       }
     }
 
-    let user = await User.findOne({ email }).select("+password");
+    let user;
     let accountCreated = false;
 
-    // If user exists and is authenticated as THAT user, skip password check
-    const isSelfBooking = authenticatedUser && user && authenticatedUser._id.toString() === user._id.toString();
-
-    if (!user) {
-      const rawPassword = password || `Auto@${Math.floor(100000 + Math.random() * 900000)}`;
-      user = await User.create({ name, email, password: rawPassword, phone, role: "user" });
-      user = await User.findById(user._id).select("+password");
-      accountCreated = true;
-    } else if (!isSelfBooking) {
-      if (!password || !(await user.comparePassword(password))) {
-        res.status(409).json({ success: false, message: "Account exists. Please login with password to continue." });
-        return;
+    if (authenticatedUser) {
+      // If the token is there, force fill like the website is logged in
+      user = authenticatedUser;
+      name = user.name;
+      email = user.email;
+      phone = user.phone || phone;
+    } else {
+      user = await User.findOne({ email }).select("+password");
+      if (!user) {
+        const rawPassword = password || `Auto@${Math.floor(100000 + Math.random() * 900000)}`;
+        user = await User.create({ name, email, password: rawPassword, phone, role: "user" });
+        user = await User.findById(user._id).select("+password");
+        accountCreated = true;
+      } else {
+        if (!password || !(await user.comparePassword(password))) {
+          res.status(409).json({ success: false, message: "Account exists. Please login with password to continue." });
+          return;
+        }
       }
     }
 

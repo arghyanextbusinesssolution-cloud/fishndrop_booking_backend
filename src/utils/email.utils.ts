@@ -1,28 +1,29 @@
-import { MailerSend, EmailParams, Sender, Recipient } from "mailersend";
+import nodemailer from "nodemailer";
 import { IBooking } from "../models/Booking";
 import logger from "../config/logger";
 
-const mailerSend = new MailerSend({
-  apiKey: process.env.MAIL_SENDER || "",
+const transporter = nodemailer.createTransport({
+  host: "smtp.gmail.com",
+  port: 465,
+  secure: true,
+  auth: {
+    user: process.env.GMAIL_NAME || "",
+    pass: process.env.GMAIL_PASSWORD || "",
+  },
 });
 
-const SENDER_EMAIL = process.env.SENDER_EMAIL || "info@test-p7kx4xwn5w2g9yjr.mlsender.net";
+const SENDER_EMAIL = process.env.GMAIL_NAME || "admin@fishndrop.com";
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@fishndrop.com";
 const BANNER_URL = "https://res.cloudinary.com/dxx54fccl/image/upload/v1776120802/fishndrop_assets/email_banner.jpg";
 
 export const sendPaymentEmails = async (booking: IBooking) => {
   try {
-    if (!process.env.MAIL_SENDER) {
-      logger.error("MAIL_SENDER API key is missing. Emails not sent.");
+    if (!process.env.GMAIL_NAME || !process.env.GMAIL_PASSWORD) {
+      logger.error("GMAIL credentials missing. Emails not sent.");
       return;
     }
 
-    const sentFrom = new Sender(SENDER_EMAIL, "Fish & Drop");
-
     // 1. Send Confirmation to Customer
-    const customerRecipients = [
-      new Recipient(booking.customerEmail, booking.customerName)
-    ];
 
     const customerHtml = `
       <!DOCTYPE html>
@@ -116,20 +117,18 @@ export const sendPaymentEmails = async (booking: IBooking) => {
       </html>
     `;
 
-    const customerParams = new EmailParams()
-      .setFrom(sentFrom)
-      .setTo(customerRecipients)
-      .setSubject(`A Culinary Experience Awaits - Fish & Drop`)
-      .setHtml(customerHtml)
-      .setText(`Confirmed: Your reservation for ${booking.partySize} guests on ${new Date(booking.bookingDate).toLocaleDateString()} is ready!`);
+    const customerMailOptions = {
+      from: `"Fish & Drop" <${SENDER_EMAIL}>`,
+      to: booking.customerEmail,
+      subject: `A Culinary Experience Awaits - Fish & Drop`,
+      html: customerHtml,
+      text: `Confirmed: Your reservation for ${booking.partySize} guests on ${new Date(booking.bookingDate).toLocaleDateString()} is ready!`,
+    };
 
-    await mailerSend.email.send(customerParams);
+    await transporter.sendMail(customerMailOptions);
     logger.info(`Premium confirmation email sent to ${booking.customerEmail}`);
 
     // 2. Send Notification to Admin (Slightly more utility-focused but still premium)
-    const adminRecipients = [
-      new Recipient(ADMIN_EMAIL, "Fish & Drop Admin")
-    ];
 
     const adminHtml = `
       <div style="font-family: 'Inter', sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;">
@@ -170,14 +169,15 @@ export const sendPaymentEmails = async (booking: IBooking) => {
       </div>
     `;
 
-    const adminParams = new EmailParams()
-      .setFrom(sentFrom)
-      .setTo(adminRecipients)
-      .setSubject(`Alert: New Booking - ${booking.customerName}`)
-      .setHtml(adminHtml)
-      .setText(`New payment received: ${booking.customerName} has booked for ${booking.partySize} people on ${new Date(booking.bookingDate).toLocaleDateString()}. Amount: $${booking.totalAmount}`);
+    const adminMailOptions = {
+      from: `"Fish & Drop" <${SENDER_EMAIL}>`,
+      to: ADMIN_EMAIL,
+      subject: `Alert: New Booking - ${booking.customerName}`,
+      html: adminHtml,
+      text: `New payment received: ${booking.customerName} has booked for ${booking.partySize} people on ${new Date(booking.bookingDate).toLocaleDateString()}. Amount: $${booking.totalAmount}`,
+    };
 
-    await mailerSend.email.send(adminParams);
+    await transporter.sendMail(adminMailOptions);
     logger.info(`Premium admin notification sent for ${booking.customerName}`);
 
   } catch (error) {

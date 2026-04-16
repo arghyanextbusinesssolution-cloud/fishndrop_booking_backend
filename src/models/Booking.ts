@@ -8,7 +8,7 @@ export interface IBooking extends Document {
   customerEmail: string;
   customerPhone: string;
   notes?: string;
-  occasion: "birthday" | "anniversary" | "graduation" | "other";
+  occasion: "birthday" | "anniversary" | "graduation" | "business" | "quiet" | "other";
   cakeDetails?: string; // Legacy
   cakePrice?: number; // Legacy
   customCakeDetails?: {
@@ -39,7 +39,7 @@ const bookingSchema = new Schema<IBooking>(
     customerEmail: { type: String, required: true, trim: true, lowercase: true },
     customerPhone: { type: String, required: true, trim: true, maxlength: 20 },
     notes: { type: String, trim: true, maxlength: 500 },
-    occasion: { type: String, enum: ["birthday", "anniversary", "graduation", "other"], required: true },
+    occasion: { type: String, enum: ["birthday", "anniversary", "graduation", "business", "quiet", "other"], required: true },
     cakeDetails: { type: String, trim: true, maxlength: 500 }, // Legacy
     cakePrice: { type: Number, min: 0, default: 0 }, // Legacy
     customCakeDetails: {
