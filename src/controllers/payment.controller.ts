@@ -101,7 +101,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       return;
     }
 
-    const booking = await Booking.findById(bookingId);
+    const booking = await Booking.findById(bookingId).populate("tables");
     if (!booking) {
       res.status(404).json({ success: false, message: "Booking not found" });
       return;
@@ -118,6 +118,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     }
 
     const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+    const tableNumbers = (booking.tables as any[]).map(t => t.tableNumber).join(", ");
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -130,8 +131,8 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
           price_data: {
             currency: "usd",
             product_data: {
-              name: "Fish & Drop Table Booking",
-              description: `Reservation for ${booking.partySize} people on ${booking.bookingDate.toDateString()} at ${booking.bookingTime}`
+              name: "Tropica Sanctuary Reservation",
+              description: `${booking.bookingType === 'private_event' ? 'Private Event' : 'Table Reservation'} for ${booking.partySize} guests on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}${tableNumbers ? ` (Tables: ${tableNumbers})` : ""}`
             },
             unit_amount: Math.max(50, Math.round(booking.totalAmount * 100))
           }
@@ -139,7 +140,19 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       ],
       metadata: {
         bookingId: String(booking._id),
-        userId: req.user!._id.toString()
+        userId: req.user!._id.toString(),
+        customerName: booking.customerName,
+        customerPhone: booking.customerPhone,
+        partySize: String(booking.partySize),
+        bookingDate: booking.bookingDate.toISOString().split('T')[0],
+        bookingTime: booking.bookingTime,
+        occasion: booking.occasion,
+        bookingType: booking.bookingType,
+        tableNumbers: tableNumbers || "N/A",
+        notes: booking.notes?.substring(0, 500) || ""
+      },
+      payment_intent_data: {
+        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} - ${booking.customerName}`
       },
       success_url: `${baseUrl}/user/payment/confirmed?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking.id}`,
       cancel_url: `${baseUrl}/user/payment/failed?bookingId=${booking.id}&reason=cancelled`
@@ -148,6 +161,49 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     res.status(201).json({ success: true, url: session.url });
   } catch (error) {
     next(new Error("Failed to create payment session"));
+  }
+};
+
+export const createPaymentIntent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({ success: false, message: "Stripe not configured" });
+      return;
+    }
+
+    const { bookingId } = req.body;
+    if (!bookingId) {
+      res.status(400).json({ success: false, message: "bookingId is required" });
+      return;
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    // Create a PaymentIntent with the order amount and currency
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.max(50, Math.round(booking.totalAmount * 100)),
+      currency: "usd",
+      automatic_payment_methods: {
+        enabled: true,
+      },
+      metadata: {
+        bookingId: String(booking._id),
+        customerName: booking.customerName,
+        bookingType: booking.bookingType
+      },
+    });
+
+    res.status(201).json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to create PaymentIntent: ${error.message}`));
   }
 };
 

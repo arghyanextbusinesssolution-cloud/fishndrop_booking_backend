@@ -61,24 +61,32 @@ const assignTables = async (
     case 3:
     case 4:
     case 5:
-      // Rule: 3/4 person four seater. 5 person also uses four seater (with extra chair consent on frontend)
+      // Rule: 3/4/5 person primarily four seater. Fallback: two 2-seaters
       if (fourSeaters.length >= 1) {
         selected = [fourSeaters[0]];
+      } else if (twoSeaters.length >= 2) {
+        selected = [twoSeaters[0], twoSeaters[1]];
       }
       break;
 
     case 6:
-      // Rule: 6 persona thjen 4 seater one and two seater one
+      // Rule: 6 person primary 1x4-seater + 1x2-seater. Fallback: 3x2-seaters
       if (fourSeaters.length >= 1 && twoSeaters.length >= 1) {
         selected = [fourSeaters[0], twoSeaters[0]];
+      } else if (twoSeaters.length >= 3) {
+        selected = [twoSeaters[0], twoSeaters[1], twoSeaters[2]];
       }
       break;
 
     case 7:
     case 8:
-      // Rule: 7/8 person two four seater
+      // Rule: 7/8 person primarily 2x4-seater. Fallbacks: 1x4+2x2 or 4x2
       if (fourSeaters.length >= 2) {
         selected = [fourSeaters[0], fourSeaters[1]];
+      } else if (fourSeaters.length >= 1 && twoSeaters.length >= 2) {
+        selected = [fourSeaters[0], twoSeaters[0], twoSeaters[1]];
+      } else if (twoSeaters.length >= 4) {
+        selected = [twoSeaters[0], twoSeaters[1], twoSeaters[2], twoSeaters[3]];
       }
       break;
   }

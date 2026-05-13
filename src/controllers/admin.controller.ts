@@ -3,6 +3,7 @@ import Booking from "../models/Booking";
 import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
 import DailyTableLock from "../models/DailyTableLock";
+import { buildDayRange } from "../utils/time.utils";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -70,25 +71,21 @@ export const getAllTables = async (req: Request, res: Response, next: NextFuncti
 
 export const getAllBookings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    console.log("[AdminController] getAllBookings query received:", req.query);
     const page = Number(req.query.page) > 0 ? Number(req.query.page) : 1;
     const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 10;
     const status = sanitizeString(req.query.status);
     const dateQuery = sanitizeString(req.query.date);
     const skip = (page - 1) * limit;
     
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filter: any = {};
     if (status) filter.status = status;
     
     if (dateQuery) {
-      const start = new Date(dateQuery);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(dateQuery);
-      end.setHours(23, 59, 59, 999);
-      if (!isNaN(start.getTime())) {
-        filter.bookingDate = { $gte: start, $lte: end };
-      }
+      const { dayStart, dayEnd } = buildDayRange(dateQuery);
+      // Include the same -6h buffer to catch legacy dates if needed, 
+      // but buildDayRange already normalizes future ones
+      const adjustedStart = new Date(dayStart.getTime() - 6 * 60 * 60 * 1000);
+      filter.bookingDate = { $gte: adjustedStart, $lte: dayEnd };
     }
 
     const [bookings, total] = await Promise.all([

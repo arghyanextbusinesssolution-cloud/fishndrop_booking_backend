@@ -28,6 +28,8 @@ export interface IBooking extends Document {
   status: "confirmed" | "cancelled";
   /** Set when table is held; cleared to paid after Stripe Checkout succeeds. */
   paymentStatus: "pending_payment" | "paid";
+  bookingType: "standard" | "private_event";
+  durationHours?: number;
 }
 
 const bookingSchema = new Schema<IBooking>(
@@ -61,6 +63,14 @@ const bookingSchema = new Schema<IBooking>(
       type: String,
       enum: ["pending_payment", "paid"],
       default: "pending_payment"
+    },
+    bookingType: {
+      type: String,
+      enum: ["standard", "private_event"],
+      default: "standard"
+    },
+    durationHours: {
+      type: Number
     }
   },
   { timestamps: true }

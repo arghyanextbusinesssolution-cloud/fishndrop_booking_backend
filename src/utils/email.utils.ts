@@ -12,8 +12,8 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-const SENDER_EMAIL = process.env.GMAIL_NAME || "admin@fishndrop.com";
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@fishndrop.com";
+const SENDER_EMAIL = process.env.GMAIL_NAME || "admin@tropica.com";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@tropica.com";
 const BANNER_URL = "https://res.cloudinary.com/dxx54fccl/image/upload/v1776120802/fishndrop_assets/email_banner.jpg";
 
 export const sendPaymentEmails = async (booking: IBooking) => {
@@ -39,7 +39,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
           <!-- Header Image -->
           <tr>
             <td>
-              <img src="${BANNER_URL}" alt="Fish & Drop" width="600" style="display: block; width: 100%; height: auto;">
+              <img src="${BANNER_URL}" alt="Tropica" width="600" style="display: block; width: 100%; height: auto;">
             </td>
           </tr>
           
@@ -49,7 +49,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
               <h1 style="font-family: 'Playfair Display', serif; font-size: 32px; color: #d4af37; margin: 0 0 24px 0; font-weight: 700; text-align: center; letter-spacing: 1px;">Reservation Confirmed</h1>
               
               <p style="font-size: 16px; line-height: 28px; color: #cccccc; margin: 0 0 32px 0; text-align: center;">
-                Dear ${booking.customerName}, your table at Fish & Drop is waiting for you. We are preparing an exceptional dining experience for your arrival.
+                Dear ${booking.customerName}, your table at Tropica is waiting for you. We are preparing an exceptional dining experience for your arrival.
               </p>
 
               <!-- Reservation Details Box -->
@@ -90,7 +90,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
               <table align="center" border="0" cellpadding="0" cellspacing="0">
                 <tr>
                   <td>
-                    <a href="https://fishndrop.com" style="display: inline-block; padding: 16px 36px; background-color: #d4af37; color: #000000; text-decoration: none; border-radius: 4px; font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Visit Website</a>
+                    <a href="https://tropica.com" style="display: inline-block; padding: 16px 36px; background-color: #d4af37; color: #000000; text-decoration: none; border-radius: 4px; font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: 1px;">Visit Website</a>
                   </td>
                 </tr>
               </table>
@@ -108,7 +108,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
                 </tr>
               </table>
               <p style="margin: 0; font-size: 11px; color: #444444;">
-                &copy; ${new Date().getFullYear()} FISH & DROP RESTAURANT. All rights reserved.
+                &copy; ${new Date().getFullYear()} TROPICA SANCTUARY. All rights reserved.
               </p>
             </td>
           </tr>
@@ -118,9 +118,9 @@ export const sendPaymentEmails = async (booking: IBooking) => {
     `;
 
     const customerMailOptions = {
-      from: `"Fish & Drop" <${SENDER_EMAIL}>`,
+      from: `"Tropica" <${SENDER_EMAIL}>`,
       to: booking.customerEmail,
-      subject: `A Culinary Experience Awaits - Fish & Drop`,
+      subject: `A Culinary Experience Awaits - Tropica`,
       html: customerHtml,
       text: `Confirmed: Your reservation for ${booking.partySize} guests on ${new Date(booking.bookingDate).toLocaleDateString()} is ready!`,
     };
@@ -170,7 +170,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
     `;
 
     const adminMailOptions = {
-      from: `"Fish & Drop" <${SENDER_EMAIL}>`,
+      from: `"Tropica" <${SENDER_EMAIL}>`,
       to: ADMIN_EMAIL,
       subject: `Alert: New Booking - ${booking.customerName}`,
       html: adminHtml,

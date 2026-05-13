@@ -1,5 +1,5 @@
 import express from "express";
-import { createCheckoutSession, handleStripeWebhook, verifyCheckoutSession } from "../controllers/payment.controller";
+import { createCheckoutSession, createPaymentIntent, handleStripeWebhook, verifyCheckoutSession } from "../controllers/payment.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
 const router = express.Router();
@@ -9,6 +9,7 @@ router.post("/webhook", express.raw({ type: "application/json" }), handleStripeW
 
 // Protected routes - need express.json() manually because they are mounted before the global parser in index.ts
 router.post("/checkout-session", express.json(), authMiddleware, createCheckoutSession);
+router.post("/create-payment-intent", express.json(), authMiddleware, createPaymentIntent);
 router.post("/verify-session", express.json(), authMiddleware, verifyCheckoutSession);
 
 export default router;

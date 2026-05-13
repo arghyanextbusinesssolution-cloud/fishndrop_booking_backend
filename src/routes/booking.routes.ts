@@ -5,8 +5,11 @@ import {
   createBookingWithAccount,
   getAvailability,
   getBookingById,
-  getUserBookings
-} from "../controllers/booking.controller";
+  getUserBookings,
+  getPrivateAvailability,
+  createPrivateEventWithAccount,
+  getVenueCapacity
+} from "../controllers/booking";
 import authMiddleware from "../middleware/auth.middleware";
 import validate from "../middleware/validate.middleware";
 import { createBookingValidator } from "../validators/booking.validator";
@@ -16,7 +19,10 @@ import { uploadCakePhoto } from "../controllers/upload.controller";
 const router = express.Router();
 
 router.get("/availability", getAvailability);
+router.get("/private-availability", getPrivateAvailability);
+router.get("/venue-capacity", getVenueCapacity);
 router.post("/reserve", createBookingValidator, validate, createBookingWithAccount);
+router.post("/reserve-private", createPrivateEventWithAccount);
 // Public route for uploading cake photos in the booking wizard
 router.post("/upload-cake-photo", uploadCakePhoto);
 
