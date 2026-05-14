@@ -88,12 +88,11 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       bookingTime,
       bookingType: "private_event",
       durationHours,
-      paymentStatus: "paid"
+      status: "pending"
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
 
-    void sendPaymentEmails(booking as any);
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 
     res.status(201).json({

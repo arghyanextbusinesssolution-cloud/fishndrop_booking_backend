@@ -36,7 +36,7 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
 
   const occupiedBookings = await Booking.find({
     bookingDate: { $gte: dayStart, $lte: dayEnd },
-    status: "confirmed"
+    status: { $in: ["confirmed", "pending"] }
   }).select("tables bookingTime bookingType durationHours");
 
   const blockedTableIds = occupiedBookings
@@ -67,7 +67,7 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     complimentaryDrinks: assignment.complimentaryDrinks,
     bookingDate: parsedDate,
     bookingTime: payload.bookingTime,
-    paymentStatus: "paid"
+    status: "pending"
   });
 
   return { booking };
@@ -86,7 +86,7 @@ export const getStandardAvailability = async (date: string, partySize: number, a
     SlotLock.find({ bookingDate: { $gte: adjustedStart, $lte: dayEnd }, isLocked: true }),
     Booking.find({
       bookingDate: { $gte: adjustedStart, $lte: dayEnd },
-      status: "confirmed"
+      status: { $in: ["confirmed", "pending"] }
     }).select("tables bookingTime bookingType durationHours")
   ]);
 

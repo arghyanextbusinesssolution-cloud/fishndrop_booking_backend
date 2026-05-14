@@ -29,7 +29,6 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    void sendPaymentEmails(result.booking as any);
     res.status(201).json({ success: true, booking: result.booking });
   } catch (error: any) {
     console.error("[Booking Create Error]:", error);
@@ -104,7 +103,6 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       return;
     }
 
-    void sendPaymentEmails(result.booking as any);
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 
     res.status(201).json({

@@ -18,6 +18,11 @@ const BANNER_URL = "https://res.cloudinary.com/dxx54fccl/image/upload/v177612080
 
 export const sendPaymentEmails = async (booking: IBooking) => {
   try {
+    if (booking.paymentStatus !== "paid") {
+      logger.warn(`Attempted to send payment emails for unpaid booking ${booking._id}. Aborting.`);
+      return;
+    }
+
     if (!process.env.GMAIL_NAME || !process.env.GMAIL_PASSWORD) {
       logger.error("GMAIL credentials missing. Emails not sent.");
       return;
@@ -134,7 +139,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
       <div style="font-family: 'Inter', sans-serif; max-width: 600px; margin: 0 auto; padding: 32px; border: 1px solid #e5e7eb; border-radius: 12px; background-color: #ffffff;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px;">
           <h1 style="color: #111827; font-size: 20px; font-weight: 700; margin: 0;">New Reservation</h1>
-          <span style="background-color: #ecfdf5; color: #065f46; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600;">PAID</span>
+          <span style="background-color: ${booking.paymentStatus === 'paid' ? '#ecfdf5' : '#fef2f2'}; color: ${booking.paymentStatus === 'paid' ? '#065f46' : '#991b1b'}; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600;">${booking.paymentStatus.toUpperCase().replace('_', ' ')}</span>
         </div>
         
         <p style="color: #4b5563; font-size: 14px; margin-bottom: 24px;">A new booking has been confirmed for <strong>${booking.customerName}</strong>.</p>
@@ -160,7 +165,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
             <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #111827; font-size: 14px; text-align: right; font-weight: 600;">${booking.partySize} Guests</td>
           </tr>
           <tr>
-            <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 700;">Total Paid</td>
+            <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 700;">${booking.paymentStatus === 'paid' ? 'Total Paid' : 'Total Amount'}</td>
             <td style="padding: 12px 0; color: #111827; font-size: 16px; font-weight: 700; text-align: right;">$${booking.totalAmount}</td>
           </tr>
         </table>

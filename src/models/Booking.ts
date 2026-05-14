@@ -25,7 +25,7 @@ export interface IBooking extends Document {
   complimentaryDrinks: number;
   bookingDate: Date;
   bookingTime: string;
-  status: "confirmed" | "cancelled";
+  status: "pending" | "confirmed" | "cancelled";
   /** Set when table is held; cleared to paid after Stripe Checkout succeeds. */
   paymentStatus: "pending_payment" | "paid";
   bookingType: "standard" | "private_event";
@@ -58,7 +58,7 @@ const bookingSchema = new Schema<IBooking>(
     complimentaryDrinks: { type: Number, default: 0 },
     bookingDate: { type: Date, required: true },
     bookingTime: { type: String, required: true },
-    status: { type: String, enum: ["confirmed", "cancelled"], default: "confirmed" },
+    status: { type: String, enum: ["pending", "confirmed", "cancelled"], default: "pending" },
     paymentStatus: {
       type: String,
       enum: ["pending_payment", "paid"],

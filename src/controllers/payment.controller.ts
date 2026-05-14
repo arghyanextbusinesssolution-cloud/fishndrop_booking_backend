@@ -251,6 +251,7 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
     }
 
     booking.paymentStatus = "paid";
+    booking.status = "confirmed";
     await booking.save();
 
     // Send confirmation emails
@@ -295,6 +296,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
           const booking = await Booking.findById(bookingId);
           if (booking && booking.paymentStatus !== "paid") {
             booking.paymentStatus = "paid";
+            booking.status = "confirmed";
             await booking.save();
             logger.info(`Booking ${bookingId} marked as paid via webhook.`);
             

@@ -9,7 +9,7 @@ export const getPrivateEventAvailability = async (date: string, duration: number
   const [allTables, slotLocks, bookingsForDay] = await Promise.all([
     Table.find(),
     SlotLock.find({ bookingDate: { $gte: dayStart, $lte: dayEnd }, isLocked: true }),
-    Booking.find({ bookingDate: { $gte: dayStart, $lte: dayEnd }, status: "confirmed" })
+    Booking.find({ bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $in: ["confirmed", "pending"] } })
   ]);
 
   const totalCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);
