@@ -71,7 +71,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const totalAmount = durationHours * 500;
+    const totalAmount = durationHours * 250;
 
     const booking = await Booking.create({
       user: user!._id,
