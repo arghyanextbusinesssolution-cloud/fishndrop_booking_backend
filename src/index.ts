@@ -41,7 +41,15 @@ const parsedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .filter(Boolean);
 
 const allowedOrigins =
-  parsedOrigins.length > 0 ? parsedOrigins : ["http://localhost:3000", "http://localhost:3001","https://fishndrop.nextbusinesssolution.com"];
+  parsedOrigins.length > 0
+    ? parsedOrigins
+    : [
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://fishndrop.nextbusinesssolution.com",
+      "https://tropica.nyc",
+      "https://www.tropica.nyc",
+    ];
 
 const corsOptions: CorsOptions = {
   origin: allowedOrigins,
@@ -81,8 +89,8 @@ app.use(globalRateLimiter);
 app.use(timeoutMiddleware);
 
 app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
+  res.json({
+    status: "ok",
     message: "Backend is running from SOURCE (ts-node)",
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV || "development"
