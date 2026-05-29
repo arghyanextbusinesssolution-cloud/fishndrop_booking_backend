@@ -198,6 +198,10 @@ export const createPaymentIntent = async (req: Request, res: Response, next: Nex
       },
     });
 
+    // Diagnostic log for key mismatch debugging (securely masked)
+    const secretKeyPrefix = (stripe as any)._api?.auth?.split(' ')[1]?.substring(0, 10);
+    logger.info(`Creating PaymentIntent with key prefix: ${secretKeyPrefix}... and bookingId: ${bookingId}`);
+
     res.status(201).json({
       success: true,
       clientSecret: paymentIntent.client_secret,
@@ -299,7 +303,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
             booking.status = "confirmed";
             await booking.save();
             logger.info(`Booking ${bookingId} marked as paid via webhook.`);
-            
+
             // Send confirmation emails
             void sendPaymentEmails(booking);
           }
