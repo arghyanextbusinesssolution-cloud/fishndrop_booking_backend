@@ -210,6 +210,8 @@ async function sendViaEmailJS(templateParams: Record<string, string | number>, t
   };
 
   console.log("[EmailJS] Sending to:", templateParams["email"] ?? templateParams["to_email"], "| Template:", templateId, "| Service:", EMAILJS_SERVICE_ID);
+  console.log("[EmailJS] Full Template Payload:");
+  console.log(JSON.stringify(templateParams, null, 2));
 
   const response = await fetch(EMAILJS_URL, {
     method: "POST",

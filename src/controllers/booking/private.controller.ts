@@ -74,7 +74,13 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const totalAmount = durationHours * 250;
 
     // Deposit = $200 for private events (or full amount if totalAmount < $200)
-    const depositAmount = Math.min(totalAmount, 200);
+    let depositAmount = Math.min(totalAmount, 200);
+    if (req.body.customDepositAmount) {
+      const custom = Number(req.body.customDepositAmount);
+      if (!isNaN(custom) && custom >= depositAmount && custom <= totalAmount) {
+        depositAmount = custom;
+      }
+    }
     const remainingAmount = totalAmount - depositAmount;
     const remainingPaymentStatus = remainingAmount === 0 ? "paid" : "unpaid";
 

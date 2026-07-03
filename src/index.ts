@@ -16,6 +16,7 @@ import paymentRoutes from "./routes/payment.routes";
 import Booking from "./models/Booking";
 import SlotLock from "./models/SlotLock";
 import { sendRemainingBalanceReminderViaEmailJS, sendRemainingBalanceCancellationViaEmailJS } from "./utils/email.utils";
+import { startReminderCron } from "./cron/reminderCron";
 
 const app = express();
 const isProduction = process.env.NODE_ENV === "production";
@@ -124,61 +125,8 @@ app.listen(port, () => {
   logger.info("Custom Cake feature loaded successfully");
 });
 
-// Background job to review remaining payment balances for private events.
-// Runs every 30 seconds to catch 2-min reminder and 1-min cancellation windows.
-setInterval(async () => {
-  try {
-    const now = new Date();
-    // Confirmed bookings where paymentStatus is deposit_paid and remaining balance is unpaid
-    const bookings = await Booking.find({
-      bookingType: "private_event",
-      status: "confirmed",
-      paymentStatus: "deposit_paid",
-      remainingPaymentStatus: "unpaid"
-    });
-
-    for (const booking of bookings) {
-      // Calculate minutes difference between booking time and now
-      const bookingTimeMs = new Date(booking.bookingDate).getTime();
-      const [hours, minutes] = booking.bookingTime.split(":").map(Number);
-      const bookingDateTime = new Date(bookingTimeMs);
-      bookingDateTime.setHours(hours, minutes, 0, 0);
-
-      const diffMs = bookingDateTime.getTime() - now.getTime();
-      const diffMins = diffMs / (1000 * 60);
-
-      // Remaining Payment Reminder: 48 hours (2880 mins) or less before the booking
-      if (diffMins > 0 && diffMins <= (48 * 60) && !booking.remainingPaymentReminderSent) {
-        logger.info(`[Background Job] Sending 48-hour remaining balance reminder for private event booking ${booking._id}`);
-
-        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
-        // Deep link to direct pay balance checkout session
-        const paymentLink = `${baseUrl}/dashboard?pay_balance=${booking._id}`;
-
-        booking.remainingPaymentReminderSent = true;
-        await booking.save();
-
-        void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
-      }
-
-      // Remaining Payment Cancellation: 24 hours (1440 mins) or less before the booking
-      // if not paid, auto-cancel
-      if (diffMins > 0 && diffMins <= (24 * 60)) {
-        logger.warn(`[Background Job] Auto-cancelling private event booking ${booking._id} due to unpaid remaining balance within 24hr window`);
-
-        booking.status = "cancelled";
-        await booking.save();
-
-        // Release slot locks
-        await SlotLock.deleteMany({ eventId: booking._id });
-
-        void sendRemainingBalanceCancellationViaEmailJS(booking);
-      }
-    }
-  } catch (err) {
-    logger.error("[Background Job Error] failed during auto-payment review:", err);
-  }
-}, 30000);
+// Background job to review remaining payment balances for private events (via node-cron).
+startReminderCron();
 
 
 process.on("unhandledRejection", (reason) => {
