@@ -44,7 +44,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
         const token = authHeader.split(" ")[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
         authenticatedUser = await User.findById(decoded.id).select("+password");
-      } catch (err) {}
+      } catch (err) { }
     }
 
     let user;
@@ -73,6 +73,11 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const allTables = await Table.find();
     const totalAmount = durationHours * 250;
 
+    // Deposit = $200 for private events (or full amount if totalAmount < $200)
+    const depositAmount = Math.min(totalAmount, 200);
+    const remainingAmount = totalAmount - depositAmount;
+    const remainingPaymentStatus = remainingAmount === 0 ? "paid" : "unpaid";
+
     const booking = await Booking.create({
       user: user!._id,
       tables: allTables.map(t => t._id),
@@ -88,7 +93,11 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       bookingTime,
       bookingType: "private_event",
       durationHours,
-      status: "pending"
+      status: "pending",
+      depositAmount,
+      remainingAmount,
+      remainingPaymentStatus,
+      remainingPaymentReminderSent: false
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);

@@ -1,8 +1,15 @@
-export const TIME_SLOTS = ["10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00"];
+// Slots: 10:00 through 23:00, then 00:00–03:00 (early morning = next calendar day)
+export const TIME_SLOTS = [
+  "10:00", "12:00", "14:00", "16:00", "18:00", "20:00", "22:00",
+  "23:00", "00:00", "01:00", "02:00", "03:00"
+];
 
+// Times before 08:00 are treated as "next day" to handle cross-midnight slots
 export const timeToMinutes = (time: string): number => {
   const [hours, minutes] = time.split(":").map(Number);
-  return hours * 60 + minutes;
+  const totalMins = hours * 60 + minutes;
+  // If before 8 AM, it belongs to the "next day" in a single venue session
+  return hours < 8 ? totalMins + 24 * 60 : totalMins;
 };
 
 export const isOverlapping = (
@@ -44,11 +51,13 @@ export const buildDayRange = (inputDate: string) => {
     day = d.getUTCDate();
   }
 
-  // Force UTC midnight
+  // Force UTC midnight for the booking date
   const parsedDate = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
   const dayStart = new Date(parsedDate);
+  // Extend dayEnd to 08:00 UTC of the NEXT day to capture midnight-crossing slots (00:00–03:00)
   const dayEnd = new Date(parsedDate);
-  dayEnd.setUTCHours(23, 59, 59, 999);
+  dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  dayEnd.setUTCHours(7, 59, 59, 999);
 
   return { parsedDate, dayStart, dayEnd };
 };

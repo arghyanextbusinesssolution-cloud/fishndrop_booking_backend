@@ -23,13 +23,13 @@ export interface BookingPayload {
 
 export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => {
   const { parsedDate, dayStart, dayEnd } = buildDayRange(payload.bookingDate);
-  
+
   const existingSlotLock = await SlotLock.findOne({
     bookingDate: { $gte: dayStart, $lte: dayEnd },
     bookingTime: payload.bookingTime,
     isLocked: true
   });
-  
+
   if (existingSlotLock) {
     return { error: "This slot is blocked by admin. Please choose another time." };
   }
@@ -51,6 +51,8 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     return { error: assignment.error };
   }
 
+  const totalAmount = assignment.totalAmount + (payload.cakePrice || 0);
+
   const booking = await Booking.create({
     user: payload.userId,
     tables: assignment.tables.map((table) => table._id),
@@ -63,11 +65,14 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     cakeDetails: payload.cakeDetails,
     customCakeDetails: payload.customCakeDetails,
     cakePrice: payload.cakePrice || 0,
-    totalAmount: assignment.totalAmount + (payload.cakePrice || 0),
+    totalAmount,
     complimentaryDrinks: assignment.complimentaryDrinks,
     bookingDate: parsedDate,
     bookingTime: payload.bookingTime,
-    status: "pending"
+    status: "pending",
+    depositAmount: totalAmount,
+    remainingAmount: 0,
+    remainingPaymentStatus: "paid"
   });
 
   return { booking };
@@ -75,10 +80,10 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
 
 export const getStandardAvailability = async (date: string, partySize: number, allowSplit: boolean) => {
   const { dayStart, dayEnd } = buildDayRange(date);
-  
+
   // Adjust range by -6 hours to catch bookings saved in local midnight (e.g. India +5:30)
   const adjustedStart = new Date(dayStart.getTime() - 6 * 60 * 60 * 1000);
-  
+
   console.log(`[Availability Check] Date: ${date}, Query Range: ${adjustedStart.toISOString()} - ${dayEnd.toISOString()}`);
 
   const [allTables, slotLocks, bookingsForDay] = await Promise.all([
@@ -107,7 +112,7 @@ export const getStandardAvailability = async (date: string, partySize: number, a
           bookedTableIds: []
         };
       }
-      
+
       const bookedTableIds = bookingsForDay
         .filter((b) => {
           const bDuration = b.bookingType === "private_event" ? (b.durationHours || 1) * 60 : 120;
@@ -116,7 +121,7 @@ export const getStandardAvailability = async (date: string, partySize: number, a
         .flatMap((booking) => booking.tables.map((tableId) => tableId.toString()));
 
       const assignment = await assignTables(partySize, date, bookedTableIds, allowSplit);
-      
+
       let assignedNote = "";
       if (!assignment.error && assignment.tables.length > 0) {
         const twoSeaters = assignment.tables.filter(t => t.capacity === 2).length;

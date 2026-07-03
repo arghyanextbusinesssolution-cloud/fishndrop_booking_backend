@@ -5,7 +5,7 @@ import Stripe from "stripe";
 import { loadEnvFiles } from "../config/loadEnv";
 import Booking from "../models/Booking";
 import logger from "../config/logger";
-import { sendPaymentEmails } from "../utils/email.utils";
+import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
 
 /** Keys copied from Stripe docs — they are not real and will not work with the API. */
 const INVALID_PLACEHOLDER_SECRETS = new Set([
@@ -78,11 +78,15 @@ function getStripe(): StripeClient | null {
   return stripeClient;
 }
 
+/**
+ * Initial checkout session.
+ * For private_event bookings: charges only the $200 deposit (booking.depositAmount).
+ * For standard bookings: charges full amount (depositAmount == totalAmount).
+ */
 export const createCheckoutSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const stripe = getStripe();
     if (!stripe) {
-      // eslint-disable-next-line no-console
       console.error(
         "Stripe checkout unavailable: set STRIPE_SECRET_KEY in backend/.env to your real secret from https://dashboard.stripe.com/test/apikeys (not the documentation example)."
       );
@@ -120,6 +124,14 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
     const tableNumbers = (booking.tables as any[]).map(t => t.tableNumber).join(", ");
 
+    // Charge deposit amount (for private events this is $200, for standard it's the full amount)
+    const chargeAmount = Math.max(50, Math.round(booking.depositAmount * 100));
+
+    const isPrivate = booking.bookingType === "private_event";
+    const depositLabel = isPrivate
+      ? `Security Deposit – Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}`
+      : `Table Reservation for ${booking.partySize} guests on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}${tableNumbers ? ` (Tables: ${tableNumbers})` : ""}`;
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -131,10 +143,10 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
           price_data: {
             currency: "usd",
             product_data: {
-              name: "Tropica Sanctuary Reservation",
-              description: `${booking.bookingType === 'private_event' ? 'Private Event' : 'Table Reservation'} for ${booking.partySize} guests on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}${tableNumbers ? ` (Tables: ${tableNumbers})` : ""}`
+              name: isPrivate ? "Tropica Venue – Security Deposit ($200)" : "Tropica Sanctuary Reservation",
+              description: depositLabel
             },
-            unit_amount: Math.max(50, Math.round(booking.totalAmount * 100))
+            unit_amount: chargeAmount
           }
         }
       ],
@@ -144,15 +156,16 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
         customerName: booking.customerName,
         customerPhone: booking.customerPhone,
         partySize: String(booking.partySize),
-        bookingDate: booking.bookingDate.toISOString().split('T')[0],
+        bookingDate: booking.bookingDate.toISOString().split("T")[0],
         bookingTime: booking.bookingTime,
         occasion: booking.occasion,
         bookingType: booking.bookingType,
         tableNumbers: tableNumbers || "N/A",
-        notes: booking.notes?.substring(0, 500) || ""
+        notes: booking.notes?.substring(0, 500) || "",
+        isBalancePayment: "false"
       },
       payment_intent_data: {
-        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} - ${booking.customerName}`
+        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} – ${booking.customerName} – DEPOSIT`
       },
       success_url: `${baseUrl}/user/payment/confirmed?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking.id}`,
       cancel_url: `${baseUrl}/user/payment/failed?bookingId=${booking.id}&reason=cancelled`
@@ -161,6 +174,84 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     res.status(201).json({ success: true, url: session.url });
   } catch (error) {
     next(new Error("Failed to create payment session"));
+  }
+};
+
+/**
+ * Remaining balance checkout session (private event only).
+ * Called from the user dashboard for bookings with paymentStatus === "deposit_paid".
+ */
+export const createRemainingCheckoutSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({ success: false, code: "STRIPE_NOT_CONFIGURED", message: "Payments are not configured." });
+      return;
+    }
+
+    const bookingId = String(req.body.bookingId || "").trim();
+    if (!bookingId) {
+      res.status(400).json({ success: false, message: "bookingId is required" });
+      return;
+    }
+
+    const booking = await Booking.findById(bookingId).populate("tables");
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    if (booking.user.toString() !== req.user?._id.toString()) {
+      res.status(403).json({ success: false, message: "Forbidden" });
+      return;
+    }
+
+    if (booking.remainingPaymentStatus === "paid") {
+      res.status(400).json({ success: false, message: "Remaining balance is already paid" });
+      return;
+    }
+
+    if (booking.paymentStatus !== "deposit_paid") {
+      res.status(400).json({ success: false, message: "Deposit must be paid before paying balance" });
+      return;
+    }
+
+    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+    const chargeAmount = Math.max(50, Math.round(booking.remainingAmount * 100));
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      billing_address_collection: "auto",
+      customer_email: req.user?.email || booking.customerEmail,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: "Tropica Venue – Remaining Balance",
+              description: `Remaining balance for Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}`
+            },
+            unit_amount: chargeAmount
+          }
+        }
+      ],
+      metadata: {
+        bookingId: String(booking._id),
+        userId: req.user!._id.toString(),
+        isBalancePayment: "true"
+      },
+      payment_intent_data: {
+        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} – ${booking.customerName} – BALANCE`
+      },
+      success_url: `${baseUrl}/user/payment/confirmed?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking.id}&type=balance`,
+      cancel_url: `${baseUrl}/user/bookings?reason=balance_cancelled`
+    });
+
+    res.status(201).json({ success: true, url: session.url });
+  } catch (error) {
+    next(new Error("Failed to create balance payment session"));
   }
 };
 
@@ -184,9 +275,9 @@ export const createPaymentIntent = async (req: Request, res: Response, next: Nex
       return;
     }
 
-    // Create a PaymentIntent with the order amount and currency
+    // Create a PaymentIntent for the deposit amount
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.max(50, Math.round(booking.totalAmount * 100)),
+      amount: Math.max(50, Math.round(booking.depositAmount * 100)),
       currency: "usd",
       automatic_payment_methods: {
         enabled: true,
@@ -194,12 +285,12 @@ export const createPaymentIntent = async (req: Request, res: Response, next: Nex
       metadata: {
         bookingId: String(booking._id),
         customerName: booking.customerName,
-        bookingType: booking.bookingType
+        bookingType: booking.bookingType,
+        isBalancePayment: "false"
       },
     });
 
-    // Diagnostic log for key mismatch debugging (securely masked)
-    const secretKeyPrefix = (stripe as any)._api?.auth?.split(' ')[1]?.substring(0, 10);
+    const secretKeyPrefix = (stripe as any)._api?.auth?.split(" ")[1]?.substring(0, 10);
     logger.info(`Creating PaymentIntent with key prefix: ${secretKeyPrefix}... and bookingId: ${bookingId}`);
 
     res.status(201).json({
@@ -236,6 +327,8 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
     }
 
     const bookingId = session.metadata?.bookingId;
+    const isBalancePayment = session.metadata?.isBalancePayment === "true";
+
     if (!bookingId) {
       res.status(400).json({ success: false, message: "Missing booking on session" });
       return;
@@ -247,24 +340,132 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
       return;
     }
 
-    // Small fix: verifyCheckoutSession should probably allow unauthenticated checks if the session is valid,
-    // but the current implementation requires req.user. We'll leave it for now as it matches existing logic.
     if (booking.user.toString() !== req.user?._id.toString()) {
       res.status(403).json({ success: false, message: "Forbidden" });
       return;
     }
 
-    booking.paymentStatus = "paid";
-    booking.status = "confirmed";
-    await booking.save();
+    if (isBalancePayment) {
+      // Remaining balance paid
+      booking.remainingPaymentStatus = "paid";
+      booking.paymentStatus = "paid";
+      await booking.save();
+      logger.info(`Booking ${bookingId} – remaining balance marked as paid.`);
+      void sendFullPaymentConfirmationViaEmailJS(booking);
+    } else {
+      // Deposit paid
+      if (booking.remainingAmount === 0) {
+        // No balance owed – fully paid immediately (e.g. small private event)
+        booking.paymentStatus = "paid";
+        booking.remainingPaymentStatus = "paid";
+        booking.status = "confirmed";
+      } else {
+        // Deposit paid, balance still pending
+        booking.paymentStatus = "deposit_paid";
+        booking.status = "confirmed";
+      }
+      await booking.save();
+      logger.info(`Booking ${bookingId} – deposit marked as paid. Remaining: $${booking.remainingAmount}`);
+      void sendPaymentEmails(booking);
 
-    // Send confirmation emails
-    void sendPaymentEmails(booking);
+      // ✅ Send EmailJS balance-due reminder if there's still a remaining amount
+      if (booking.remainingAmount > 0) {
+        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const paymentLink = `${baseUrl}/user/venue-bookings`;
+        console.log(`\n🟡 [EmailJS] Deposit confirmed for booking ${bookingId}`);
+        console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
+        console.log(`🟡 [EmailJS] Payment link: ${paymentLink}`);
+        void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+      } else {
+        console.log(`\n🟡 [EmailJS] Deposit covers full amount for booking ${bookingId}`);
+        void sendFullPaymentConfirmationViaEmailJS(booking);
+      }
+    }
 
     const updated = await Booking.findById(bookingId).populate("tables");
     res.status(200).json({ success: true, booking: updated });
   } catch (error) {
     next(new Error("Failed to verify payment"));
+  }
+};
+
+export const verifyPaymentIntent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({ success: false, code: "STRIPE_NOT_CONFIGURED", message: "Payments are not configured." });
+      return;
+    }
+
+    const { paymentIntentId } = req.body;
+    if (!paymentIntentId) {
+      res.status(400).json({ success: false, message: "paymentIntentId is required" });
+      return;
+    }
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+    if (paymentIntent.status !== "succeeded") {
+      res.status(400).json({ success: false, message: "Payment intent not succeeded" });
+      return;
+    }
+
+    const bookingId = paymentIntent.metadata?.bookingId;
+    const isBalancePayment = paymentIntent.metadata?.isBalancePayment === "true";
+
+    if (!bookingId) {
+      res.status(400).json({ success: false, message: "Missing booking on payment intent" });
+      return;
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    if (booking.paymentStatus === "paid" && (!isBalancePayment || booking.remainingPaymentStatus === "paid")) {
+      // Already handled by webhook
+      const updated = await Booking.findById(bookingId).populate("tables");
+      res.status(200).json({ success: true, booking: updated });
+      return;
+    }
+
+    if (isBalancePayment) {
+      booking.remainingPaymentStatus = "paid";
+      booking.paymentStatus = "paid";
+      await booking.save();
+      logger.info(`PaymentIntent Verification: Booking ${bookingId} remaining balance marked as paid.`);
+      void sendFullPaymentConfirmationViaEmailJS(booking);
+    } else {
+      if (booking.remainingAmount === 0) {
+        booking.paymentStatus = "paid";
+        booking.remainingPaymentStatus = "paid";
+        booking.status = "confirmed";
+      } else {
+        booking.paymentStatus = "deposit_paid";
+        booking.status = "confirmed";
+      }
+      await booking.save();
+      logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
+      void sendPaymentEmails(booking);
+
+      if (booking.remainingAmount > 0) {
+        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const paymentLink = `${baseUrl}/user/venue-bookings`;
+        console.log(`\n🟡 [EmailJS] PaymentIntent verified for booking ${bookingId}`);
+        console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
+        console.log(`🟡 [EmailJS] Payment link: ${paymentLink}`);
+        void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+      } else {
+        console.log(`\n🟡 [EmailJS] Deposit covers full amount for booking ${bookingId}`);
+        void sendFullPaymentConfirmationViaEmailJS(booking);
+      }
+    }
+
+    const updated = await Booking.findById(bookingId).populate("tables");
+    res.status(200).json({ success: true, booking: updated });
+  } catch (error) {
+    next(new Error("Failed to verify payment intent"));
   }
 };
 
@@ -289,26 +490,50 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
     return;
   }
 
-  // Handle the event
   switch (event.type) {
     case "checkout.session.completed": {
       const session = event.data.object as any;
       const bookingId = session.metadata?.bookingId;
+      const isBalancePayment = session.metadata?.isBalancePayment === "true";
 
       if (bookingId) {
         try {
           const booking = await Booking.findById(bookingId);
-          if (booking && booking.paymentStatus !== "paid") {
-            booking.paymentStatus = "paid";
-            booking.status = "confirmed";
-            await booking.save();
-            logger.info(`Booking ${bookingId} marked as paid via webhook.`);
+          if (booking) {
+            if (isBalancePayment && booking.remainingPaymentStatus !== "paid") {
+              booking.remainingPaymentStatus = "paid";
+              booking.paymentStatus = "paid";
+              await booking.save();
+              logger.info(`Webhook: Booking ${bookingId} balance marked as paid.`);
+              void sendFullPaymentConfirmationViaEmailJS(booking);
+            } else if (!isBalancePayment && booking.paymentStatus === "pending_payment") {
+              if (booking.remainingAmount === 0) {
+                booking.paymentStatus = "paid";
+                booking.remainingPaymentStatus = "paid";
+                booking.status = "confirmed";
+              } else {
+                booking.paymentStatus = "deposit_paid";
+                booking.status = "confirmed";
+              }
+              await booking.save();
+              logger.info(`Webhook: Booking ${bookingId} deposit marked as paid.`);
+              void sendPaymentEmails(booking);
 
-            // Send confirmation emails
-            void sendPaymentEmails(booking);
+              if (booking.remainingAmount > 0) {
+                const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+                const paymentLink = `${baseUrl}/user/venue-bookings`;
+                console.log(`\n🟡 [EmailJS] Stripe Webhook: Deposit confirmed for booking ${bookingId}`);
+                console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
+                console.log(`🟡 [EmailJS] Payment link: ${paymentLink}`);
+                void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+              } else {
+                console.log(`\n🟡 [EmailJS] Deposit covers full amount for booking ${bookingId}`);
+                void sendFullPaymentConfirmationViaEmailJS(booking);
+              }
+            }
           }
         } catch (dbErr: any) {
-          logger.error(`Failed to update booking ${bookingId} via webhook.`, { error: dbErr.message });
+          logger.error(`Webhook: Failed to update booking ${bookingId}.`, { error: dbErr.message });
         }
       }
       break;
@@ -319,4 +544,3 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
 
   res.json({ received: true });
 };
-

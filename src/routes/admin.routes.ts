@@ -9,7 +9,8 @@ import {
   updateTableCounts,
   getSlotLocks,
   getPaymentSummary,
-  deleteTable
+  deleteTable,
+  deleteBooking
 } from "../controllers/admin.controller";
 import adminOnly from "../middleware/admin.middleware";
 import authMiddleware from "../middleware/auth.middleware";
@@ -25,6 +26,7 @@ router.delete("/tables/:id", deleteTable);
 router.patch("/slots/lock", setSlotLock);
 router.get("/slot-locks", getSlotLocks);
 router.get("/bookings", getAllBookings);
+router.delete("/bookings/:id", deleteBooking);
 router.get("/stats", getTableStats);
 router.get("/payments/summary", getPaymentSummary);
 

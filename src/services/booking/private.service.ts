@@ -15,8 +15,8 @@ export const getPrivateEventAvailability = async (date: string, duration: number
   const totalCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);
 
   const HOURLY_SLOTS = [];
-  for (let i = 10; i <= 22; i++) {
-    HOURLY_SLOTS.push(`${i}:00`);
+  for (let i = 10; i <= 23; i++) {
+    HOURLY_SLOTS.push(`${i < 10 ? "0" : ""}${i}:00`);
   }
 
   const isSlotOccupied = (slotTime: string) => {
@@ -40,12 +40,16 @@ export const getPrivateEventAvailability = async (date: string, duration: number
     let blockAvailable = true;
     const startMins = timeToMinutes(timeSlot);
     const endMins = startMins + duration * 60;
-    
-    if (endMins > 23 * 60) {
+
+    // Allow blocks that end by 3 AM next day (3*60 + 24*60 = 1620 mins in our model)
+    if (endMins > 27 * 60) {
       blockAvailable = false;
     } else {
       for (let m = startMins; m < endMins; m += 60) {
-        const checkTime = `${Math.floor(m / 60)}:00`;
+        // Convert back to HH:MM, wrapping midnight (e.g. 1500 mins → 01:00)
+        const rawHour = Math.floor(m / 60);
+        const hour = rawHour >= 24 ? rawHour - 24 : rawHour;
+        const checkTime = `${hour < 10 ? "0" : ""}${hour}:00`;
         if (isSlotOccupied(checkTime)) {
           blockAvailable = false;
           break;
@@ -65,16 +69,16 @@ export const getPrivateEventAvailability = async (date: string, duration: number
 
 export const createSlotLocksForPrivateEvent = async (bookingId: any, bookingDate: Date, bookingTime: string, durationHours: number) => {
   const eventDurationMins = durationHours * 60;
-  
+
   for (const timeSlot of TIME_SLOTS) {
     if (isOverlapping(bookingTime, eventDurationMins, timeSlot, 120)) {
-       await SlotLock.create({
-         bookingDate,
-         bookingTime: timeSlot,
-         isLocked: true,
-         reason: "Private Event Buyout",
-         eventId: bookingId
-       });
+      await SlotLock.create({
+        bookingDate,
+        bookingTime: timeSlot,
+        isLocked: true,
+        reason: "Private Event Buyout",
+        eventId: bookingId
+      });
     }
   }
 };

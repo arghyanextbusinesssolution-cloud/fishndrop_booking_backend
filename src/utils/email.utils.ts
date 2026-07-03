@@ -18,7 +18,7 @@ const BANNER_URL = "https://res.cloudinary.com/dxx54fccl/image/upload/v177612080
 
 export const sendPaymentEmails = async (booking: IBooking) => {
   try {
-    if (booking.paymentStatus !== "paid") {
+    if (booking.paymentStatus !== "paid" && booking.paymentStatus !== "deposit_paid") {
       logger.warn(`Attempted to send payment emails for unpaid booking ${booking._id}. Aborting.`);
       return;
     }
@@ -189,3 +189,153 @@ export const sendPaymentEmails = async (booking: IBooking) => {
     logger.error("Failed to send premium payment emails", { error });
   }
 };
+
+// ──────────────────────────────────────────────────────────────
+// EmailJS Integration – Remaining Balance Reminders & Cancels
+// ──────────────────────────────────────────────────────────────
+
+const EMAILJS_SERVICE_ID = "service_ar3n8ua";
+const EMAILJS_TEMPLATE_ID = "template_dkjbkjx";
+const EMAILJS_PUBLIC_KEY = "UHhDHPjsoUXe4-fx2";
+const EMAILJS_PRIVATE_KEY = "f4JCSmWIwB8m4cy0xRbOo";
+const EMAILJS_URL = "https://api.emailjs.com/api/v1.0/email/send";
+
+async function sendViaEmailJS(templateParams: Record<string, string | number>, templateId: string = EMAILJS_TEMPLATE_ID): Promise<void> {
+  const payload = {
+    service_id: EMAILJS_SERVICE_ID,
+    template_id: templateId,
+    user_id: EMAILJS_PUBLIC_KEY,
+    accessToken: EMAILJS_PRIVATE_KEY,
+    template_params: templateParams
+  };
+
+  console.log("[EmailJS] Sending to:", templateParams["email"] ?? templateParams["to_email"], "| Template:", templateId, "| Service:", EMAILJS_SERVICE_ID);
+
+  const response = await fetch(EMAILJS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+
+  const text = await response.text();
+  if (!response.ok) {
+    console.error(`[EmailJS] FAILED ${response.status}: ${text}`);
+    throw new Error(`EmailJS error ${response.status}: ${text}`);
+  }
+  console.log(`[EmailJS] SUCCESS ${response.status}: ${text}`);
+}
+
+export const sendRemainingBalanceReminderViaEmailJS = async (booking: IBooking, paymentLink: string): Promise<void> => {
+  try {
+    const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+    const durationHours = booking.durationHours || 1;
+    const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;
+    const endHour = Number(booking.bookingTime.split(":")[0]) + durationHours;
+    const checkOutStr = `${bookingDateStr} at ${endHour}:00`;
+
+    console.log(`\n📧 [EmailJS] ▶ Triggering balance-due reminder...`);
+    console.log(`📧 [EmailJS]   Booking ID : ${booking._id}`);
+    console.log(`📧 [EmailJS]   To         : ${booking.customerEmail} (${booking.customerName})`);
+    console.log(`📧 [EmailJS]   Remaining  : $${booking.remainingAmount} of $${booking.totalAmount}`);
+    console.log(`📧 [EmailJS]   Pay Link   : ${paymentLink}`);
+    console.log(`📧 [EmailJS]   Template   : ${EMAILJS_TEMPLATE_ID} | Service: ${EMAILJS_SERVICE_ID}`);
+
+    await sendViaEmailJS({
+      email: booking.customerEmail,         // maps to {{email}} — recipient address
+      guestName: booking.customerName,
+      hostelName: "Tropica Sanctuary",
+      bookingId: booking._id.toString(),
+      checkIn: checkInStr,
+      checkOut: checkOutStr,
+      roomType: "Private Venue Buyout",
+      totalAmount: booking.totalAmount,
+      paidAmount: booking.depositAmount,
+      remainingAmount: booking.remainingAmount,
+      paymentLink,
+      supportEmail: "support@tropica.nyc",
+      supportPhone: booking.customerPhone,
+      year: new Date().getFullYear()
+    });
+
+    console.log(`✅ [EmailJS] Reminder email SENT successfully to ${booking.customerEmail}`);
+    logger.info(`EmailJS reminder sent to ${booking.customerEmail} for booking ${booking._id}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`❌ [EmailJS] FAILED to send reminder to ${booking.customerEmail}:`, error.message);
+    } else {
+      console.error(`❌ [EmailJS] FAILED to send reminder to ${booking.customerEmail}:`, error);
+    }
+  }
+};
+
+export const sendRemainingBalanceCancellationViaEmailJS = async (booking: IBooking): Promise<void> => {
+  try {
+    const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+    const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;
+
+    await sendViaEmailJS({
+      guestName: booking.customerName,
+      hostelName: "Tropica Sanctuary",
+      bookingId: booking._id.toString(),
+      checkIn: checkInStr,
+      checkOut: checkInStr,
+      roomType: "Private Venue Buyout",
+      totalAmount: booking.totalAmount,
+      paidAmount: booking.depositAmount,
+      remainingAmount: booking.remainingAmount,
+      paymentLink: "N/A – Booking Cancelled",
+      supportEmail: "support@tropica.nyc",
+      supportPhone: booking.customerPhone,
+      year: new Date().getFullYear()
+    });
+
+    logger.info(`EmailJS cancellation notice sent to ${booking.customerEmail} for booking ${booking._id}`);
+  } catch (error) {
+    logger.error("Failed to send EmailJS cancellation notice", { error });
+  }
+};
+
+export const sendFullPaymentConfirmationViaEmailJS = async (booking: IBooking): Promise<void> => {
+  try {
+    const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric"
+    });
+    const durationHours = booking.durationHours || 1;
+    const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;
+    const startHour = Number(booking.bookingTime.split(":")[0]);
+    const endHour = startHour + durationHours;
+    const ampm = endHour >= 12 ? (endHour >= 24 ? "AM" : "PM") : "AM";
+    const formattedEndHour = endHour > 12 ? (endHour % 12 === 0 ? 12 : endHour % 12) : (endHour === 0 ? 12 : endHour);
+    const minuteStr = booking.bookingTime.split(":")[1] || "00";
+    const checkOutStr = `${bookingDateStr} at ${formattedEndHour}:${minuteStr} ${ampm}`;
+
+    console.log(`\n📧 [EmailJS] ▶ Triggering full-payment confirmation...`);
+    console.log(`📧 [EmailJS]   Booking ID : ${booking._id}`);
+    console.log(`📧 [EmailJS]   To         : ${booking.customerEmail} (${booking.customerName})`);
+
+    await sendViaEmailJS({
+      email: booking.customerEmail,
+      guestName: booking.customerName,
+      bookingId: booking._id.toString(),
+      checkIn: checkInStr,
+      checkOut: checkOutStr,
+      roomType: "Private Venue Buyout",
+      totalAmount: booking.totalAmount,
+      2026: new Date().getFullYear()
+    }, "template_ijwozde");
+
+    console.log(`✅ [EmailJS] Full payment confirmation SENT successfully to ${booking.customerEmail}`);
+    logger.info(`EmailJS full payment confirmation sent to ${booking.customerEmail} for booking ${booking._id}`);
+  } catch (error) {
+    if (error instanceof Error) {
+      console.error(`❌ [EmailJS] FAILED to send full payment confirmation to ${booking.customerEmail}:`, error.message);
+    } else {
+      console.error(`❌ [EmailJS] FAILED to send full payment confirmation to ${booking.customerEmail}:`, error);
+    }
+  }
+};
+

@@ -36,7 +36,7 @@ export const getAllTables = async (req: Request, res: Response, next: NextFuncti
   try {
     const dateQuery = sanitizeString(req.query.date);
     const tables = await Table.find().sort({ tableNumber: 1 });
-    
+
     let dailyLocks: any[] = [];
     if (dateQuery) {
       const start = new Date(dateQuery);
@@ -56,13 +56,13 @@ export const getAllTables = async (req: Request, res: Response, next: NextFuncti
       };
     });
 
-    res.status(200).json({ 
-      success: true, 
-      tables: mergedTables, 
+    res.status(200).json({
+      success: true,
+      tables: mergedTables,
       counts: {
         twoSeaters: mergedTables.filter((table) => table.capacity === 2).length,
         fourSeaters: mergedTables.filter((table) => table.capacity === 4).length
-      } 
+      }
     });
   } catch (error) {
     next(new Error("Failed to fetch tables"));
@@ -76,10 +76,10 @@ export const getAllBookings = async (req: Request, res: Response, next: NextFunc
     const status = sanitizeString(req.query.status);
     const dateQuery = sanitizeString(req.query.date);
     const skip = (page - 1) * limit;
-    
+
     const filter: any = {};
     if (status) filter.status = status;
-    
+
     if (dateQuery) {
       const { dayStart, dayEnd } = buildDayRange(dateQuery);
       // Include the same -6h buffer to catch legacy dates if needed, 
@@ -213,7 +213,7 @@ export const setTableAvailability = async (req: Request, res: Response, next: Ne
     if (dateQuery) {
       const date = new Date(dateQuery);
       date.setHours(0, 0, 0, 0);
-      
+
       if (isAvailable) {
         // Unlocking: Remove daily lock
         await DailyTableLock.findOneAndDelete({ table: tableId, date });
@@ -244,7 +244,7 @@ export const setTableAvailability = async (req: Request, res: Response, next: Ne
 export const deleteTable = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const tableId = sanitizeString(req.params.id);
-    
+
     // Check if table has any future confirmed bookings
     const futureBookings = await Booking.findOne({
       tables: tableId,
@@ -253,9 +253,9 @@ export const deleteTable = async (req: Request, res: Response, next: NextFunctio
     });
 
     if (futureBookings) {
-      res.status(400).json({ 
-        success: false, 
-        message: "Cannot delete table with active future bookings. Cancel the bookings first." 
+      res.status(400).json({
+        success: false,
+        message: "Cannot delete table with active future bookings. Cancel the bookings first."
       });
       return;
     }
@@ -265,7 +265,7 @@ export const deleteTable = async (req: Request, res: Response, next: NextFunctio
       res.status(404).json({ success: false, message: "Table not found" });
       return;
     }
-    
+
     res.status(200).json({ success: true, message: "Table deleted successfully" });
   } catch (error) {
     next(new Error("Failed to delete table"));
@@ -355,7 +355,27 @@ export const getPaymentSummary = async (req: Request, res: Response, next: NextF
       },
       recentBookings,
     });
+
+
   } catch (error) {
-    next(new Error("Failed to fetch payment summary"));
+    next(new Error(" Failed to fetch payment summary"));
+  }
+};
+
+export const deleteBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const bookingId = req.params.id;
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+    if (booking.bookingType === "private_event") {
+      await SlotLock.deleteMany({ eventId: booking._id });
+    }
+    await Booking.findByIdAndDelete(bookingId);
+    res.status(200).json({ success: true, message: "Booking deleted successfully" });
+  } catch (error) {
+    next(new Error("Failed to delete booking"));
   }
 };

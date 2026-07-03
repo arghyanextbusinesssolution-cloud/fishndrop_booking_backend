@@ -26,10 +26,16 @@ export interface IBooking extends Document {
   bookingDate: Date;
   bookingTime: string;
   status: "pending" | "confirmed" | "cancelled";
-  /** Set when table is held; cleared to paid after Stripe Checkout succeeds. */
-  paymentStatus: "pending_payment" | "paid";
+  /** For Private events: starts at pending_payment, moves to deposit_paid on $200 checkout, then paid when balance is settled. For standard: pending_payment -> paid */
+  paymentStatus: "pending_payment" | "deposit_paid" | "paid";
   bookingType: "standard" | "private_event";
   durationHours?: number;
+  // Partial payment fields (private_event only)
+  depositAmount: number;
+  remainingAmount: number;
+  remainingPaymentStatus: "unpaid" | "paid";
+  remainingPaymentReminderSent: boolean;
+  remainingPaymentSessionId?: string;
 }
 
 const bookingSchema = new Schema<IBooking>(
@@ -61,7 +67,7 @@ const bookingSchema = new Schema<IBooking>(
     status: { type: String, enum: ["pending", "confirmed", "cancelled"], default: "pending" },
     paymentStatus: {
       type: String,
-      enum: ["pending_payment", "paid"],
+      enum: ["pending_payment", "deposit_paid", "paid"],
       default: "pending_payment"
     },
     bookingType: {
@@ -71,6 +77,26 @@ const bookingSchema = new Schema<IBooking>(
     },
     durationHours: {
       type: Number
+    },
+    depositAmount: {
+      type: Number,
+      default: 0
+    },
+    remainingAmount: {
+      type: Number,
+      default: 0
+    },
+    remainingPaymentStatus: {
+      type: String,
+      enum: ["unpaid", "paid"],
+      default: "unpaid"
+    },
+    remainingPaymentReminderSent: {
+      type: Boolean,
+      default: false
+    },
+    remainingPaymentSessionId: {
+      type: String
     }
   },
   { timestamps: true }
