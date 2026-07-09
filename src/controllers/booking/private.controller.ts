@@ -71,7 +71,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const totalAmount = durationHours * 250;
+    const totalAmount = durationHours * 125;
 
     // Deposit = $200 for private events (or full amount if totalAmount < $200)
     let depositAmount = Math.min(totalAmount, 200);
