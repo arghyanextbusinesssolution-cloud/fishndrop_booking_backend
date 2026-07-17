@@ -6,6 +6,7 @@ import Booking from "../../models/Booking";
 import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
+import Coupon from "../../models/Coupon";
 
 export const getPrivateAvailability = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -72,16 +73,29 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
     const totalAmount = durationHours * 125;
+    let currentAmount = totalAmount;
+    let couponUsed, couponCode, promoterName, discountApplied = 0;
 
-    // Deposit = $200 for private events (or full amount if totalAmount < $200)
-    let depositAmount = Math.min(totalAmount, 200);
+    if (req.body.couponCode) {
+      const coupon = await Coupon.findOne({ code: String(req.body.couponCode).toUpperCase(), status: "active" });
+      if (coupon && (!coupon.expiryDate || new Date() <= coupon.expiryDate) && (!coupon.usageLimit || coupon.usageCount < coupon.usageLimit)) {
+        couponUsed = coupon._id;
+        couponCode = coupon.code;
+        promoterName = coupon.promoterName;
+        discountApplied = coupon.discountType === "percentage" ? (totalAmount * coupon.discountValue) / 100 : coupon.discountValue;
+        currentAmount = Math.max(0, totalAmount - discountApplied);
+      }
+    }
+
+    // Deposit = $200 for private events (or full current amount if < $200)
+    let depositAmount = Math.min(currentAmount, 200);
     if (req.body.customDepositAmount) {
       const custom = Number(req.body.customDepositAmount);
-      if (!isNaN(custom) && custom >= depositAmount && custom <= totalAmount) {
+      if (!isNaN(custom) && custom >= depositAmount && custom <= currentAmount) {
         depositAmount = custom;
       }
     }
-    const remainingAmount = totalAmount - depositAmount;
+    const remainingAmount = currentAmount - depositAmount;
     const remainingPaymentStatus = remainingAmount === 0 ? "paid" : "unpaid";
 
     const booking = await Booking.create({
@@ -93,7 +107,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       customerPhone: phone,
       notes,
       occasion,
-      totalAmount,
+      totalAmount: currentAmount,
       complimentaryDrinks: partySize * 2,
       bookingDate: parsedDate,
       bookingTime,
@@ -103,7 +117,13 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       depositAmount,
       remainingAmount,
       remainingPaymentStatus,
-      remainingPaymentReminderSent: false
+      remainingPaymentReminderSent: false,
+      couponUsed,
+      couponCode,
+      promoterName,
+      discountApplied,
+      originalAmount: totalAmount,
+      finalAmount: currentAmount
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);

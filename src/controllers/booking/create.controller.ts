@@ -4,6 +4,40 @@ import User from "../../models/User";
 import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
+import Coupon from "../../models/Coupon";
+
+export const validateCoupon = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const couponCode = req.body.couponCode;
+    if (!couponCode) {
+      res.status(400).json({ success: false, message: "Coupon code required" });
+      return;
+    }
+    const coupon = await Coupon.findOne({ code: String(couponCode).toUpperCase(), status: "active" });
+    if (!coupon) {
+      res.status(404).json({ success: false, message: "Coupon not found, expired, or inactive" });
+      return;
+    }
+    if (coupon.expiryDate && new Date() > coupon.expiryDate) {
+      res.status(400).json({ success: false, message: "Coupon has expired" });
+      return;
+    }
+    if (coupon.usageLimit && coupon.usageCount >= coupon.usageLimit) {
+      res.status(400).json({ success: false, message: "Coupon usage limit reached" });
+      return;
+    }
+    res.status(200).json({
+      success: true,
+      valid: true,
+      discount: coupon.discountValue,
+      discountType: coupon.discountType,
+      couponId: coupon._id,
+      promoterName: coupon.promoterName
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, message: "Validation error" });
+  }
+};
 
 export const createBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -22,6 +56,17 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       cakePrice: Number(req.body.cakePrice || 0),
       allowSplit: req.body.allowSplit === true
     };
+
+    if (req.body.couponCode) {
+      const coupon = await Coupon.findOne({ code: String(req.body.couponCode).toUpperCase(), status: "active" });
+      if (coupon && (!coupon.expiryDate || new Date() <= coupon.expiryDate) && (!coupon.usageLimit || coupon.usageCount < coupon.usageLimit)) {
+        payload.couponUsed = coupon._id as any;
+        payload.couponCode = coupon.code;
+        payload.promoterName = coupon.promoterName;
+        payload.discountType = coupon.discountType;
+        payload.discountValue = coupon.discountValue;
+      }
+    }
 
     const result = await BookingService.reserveTablesAndCreateBooking(payload);
     if (result.error || !result.booking) {
@@ -50,7 +95,7 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
         const token = authHeader.split(" ")[1];
         const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
         authenticatedUser = await User.findById(decoded.id).select("+password");
-      } catch (err) {}
+      } catch (err) { }
     }
 
     let user;

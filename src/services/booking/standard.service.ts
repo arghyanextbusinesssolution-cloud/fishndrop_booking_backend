@@ -19,6 +19,11 @@ export interface BookingPayload {
   cakePrice?: number;
   customCakeDetails?: any;
   allowSplit?: boolean;
+  couponUsed?: mongoose.Types.ObjectId;
+  couponCode?: string;
+  promoterName?: string;
+  discountType?: "percentage" | "fixed";
+  discountValue?: number;
 }
 
 export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => {
@@ -51,7 +56,18 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     return { error: assignment.error };
   }
 
-  const totalAmount = assignment.totalAmount + (payload.cakePrice || 0);
+  const originalAmount = assignment.totalAmount + (payload.cakePrice || 0);
+  let finalAmount = originalAmount;
+  let discountApplied = 0;
+
+  if (payload.discountType && payload.discountValue !== undefined) {
+    if (payload.discountType === "percentage") {
+      discountApplied = (originalAmount * payload.discountValue) / 100;
+    } else {
+      discountApplied = payload.discountValue;
+    }
+    finalAmount = Math.max(0, originalAmount - discountApplied);
+  }
 
   const booking = await Booking.create({
     user: payload.userId,
@@ -65,14 +81,20 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     cakeDetails: payload.cakeDetails,
     customCakeDetails: payload.customCakeDetails,
     cakePrice: payload.cakePrice || 0,
-    totalAmount,
+    totalAmount: finalAmount,
     complimentaryDrinks: assignment.complimentaryDrinks,
     bookingDate: parsedDate,
     bookingTime: payload.bookingTime,
     status: "pending",
-    depositAmount: totalAmount,
+    depositAmount: finalAmount,
     remainingAmount: 0,
-    remainingPaymentStatus: "paid"
+    remainingPaymentStatus: "paid",
+    couponUsed: payload.couponUsed,
+    couponCode: payload.couponCode,
+    promoterName: payload.promoterName,
+    discountApplied,
+    originalAmount,
+    finalAmount
   });
 
   return { booking };

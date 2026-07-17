@@ -14,6 +14,7 @@ import {
 } from "../controllers/admin.controller";
 import adminOnly from "../middleware/admin.middleware";
 import authMiddleware from "../middleware/auth.middleware";
+import couponRoutes from "./coupon.routes";
 
 const router = express.Router();
 
@@ -29,5 +30,8 @@ router.get("/bookings", getAllBookings);
 router.delete("/bookings/:id", deleteBooking);
 router.get("/stats", getTableStats);
 router.get("/payments/summary", getPaymentSummary);
+
+// Mount coupon routes
+router.use("/coupons", couponRoutes);
 
 export default router;

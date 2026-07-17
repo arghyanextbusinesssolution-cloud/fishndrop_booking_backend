@@ -4,6 +4,7 @@ import path from "path";
 import Stripe from "stripe";
 import { loadEnvFiles } from "../config/loadEnv";
 import Booking from "../models/Booking";
+import Coupon from "../models/Coupon";
 import logger from "../config/logger";
 import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
 
@@ -354,19 +355,27 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
       void sendFullPaymentConfirmationViaEmailJS(booking);
     } else {
       // Deposit paid
-      if (booking.remainingAmount === 0) {
-        // No balance owed – fully paid immediately (e.g. small private event)
-        booking.paymentStatus = "paid";
-        booking.remainingPaymentStatus = "paid";
-        booking.status = "confirmed";
+      if (booking.paymentStatus === "pending_payment") {
+        if (booking.remainingAmount === 0) {
+          booking.paymentStatus = "paid";
+          booking.remainingPaymentStatus = "paid";
+          booking.status = "confirmed";
+        } else {
+          booking.paymentStatus = "deposit_paid";
+          booking.status = "confirmed";
+        }
+
+        if (booking.couponUsed) {
+          await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } }).catch(e => logger.error(`Failed to increment coupon ${booking.couponUsed}`, e));
+        }
+
+        await booking.save();
+        logger.info(`Booking ${bookingId} – deposit marked as paid. Remaining: $${booking.remainingAmount}`);
+        void sendPaymentEmails(booking);
       } else {
-        // Deposit paid, balance still pending
-        booking.paymentStatus = "deposit_paid";
-        booking.status = "confirmed";
+        // Idempotency: skip coupon increment if already paid.
+        logger.info(`Booking ${bookingId} already marked as paid.`);
       }
-      await booking.save();
-      logger.info(`Booking ${bookingId} – deposit marked as paid. Remaining: $${booking.remainingAmount}`);
-      void sendPaymentEmails(booking);
 
       // ✅ Send EmailJS balance-due reminder if there's still a remaining amount
       if (booking.remainingAmount > 0) {
@@ -437,17 +446,22 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
       logger.info(`PaymentIntent Verification: Booking ${bookingId} remaining balance marked as paid.`);
       void sendFullPaymentConfirmationViaEmailJS(booking);
     } else {
-      if (booking.remainingAmount === 0) {
-        booking.paymentStatus = "paid";
-        booking.remainingPaymentStatus = "paid";
-        booking.status = "confirmed";
-      } else {
-        booking.paymentStatus = "deposit_paid";
-        booking.status = "confirmed";
+      if (booking.paymentStatus === "pending_payment") {
+        if (booking.remainingAmount === 0) {
+          booking.paymentStatus = "paid";
+          booking.remainingPaymentStatus = "paid";
+          booking.status = "confirmed";
+        } else {
+          booking.paymentStatus = "deposit_paid";
+          booking.status = "confirmed";
+        }
+        if (booking.couponUsed) {
+          await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } });
+        }
+        await booking.save();
+        logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
+        void sendPaymentEmails(booking);
       }
-      await booking.save();
-      logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
-      void sendPaymentEmails(booking);
 
       if (booking.remainingAmount > 0) {
         const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
@@ -514,6 +528,9 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
               } else {
                 booking.paymentStatus = "deposit_paid";
                 booking.status = "confirmed";
+              }
+              if (booking.couponUsed) {
+                await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } }).catch(e => logger.error(`Stripe Webhook: Failed to increment coupon`, e));
               }
               await booking.save();
               logger.info(`Webhook: Booking ${bookingId} deposit marked as paid.`);

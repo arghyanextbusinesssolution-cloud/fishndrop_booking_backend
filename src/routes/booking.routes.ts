@@ -3,6 +3,7 @@ import {
   cancelBooking,
   createBooking,
   createBookingWithAccount,
+  validateCoupon,
   getAvailability,
   getBookingById,
   getUserBookings,
@@ -23,6 +24,7 @@ router.get("/private-availability", getPrivateAvailability);
 router.get("/venue-capacity", getVenueCapacity);
 router.post("/reserve", createBookingValidator, validate, createBookingWithAccount);
 router.post("/reserve-private", createPrivateEventWithAccount);
+router.post("/validate-coupon", validateCoupon);
 // Public route for uploading cake photos in the booking wizard
 router.post("/upload-cake-photo", uploadCakePhoto);
 

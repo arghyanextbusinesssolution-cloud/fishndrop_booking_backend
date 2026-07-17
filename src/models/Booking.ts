@@ -30,6 +30,15 @@ export interface IBooking extends Document {
   paymentStatus: "pending_payment" | "deposit_paid" | "paid";
   bookingType: "standard" | "private_event";
   durationHours?: number;
+
+  // Referral Coupon Fields
+  couponUsed?: Types.ObjectId;
+  couponCode?: string;
+  promoterName?: string;
+  discountApplied?: number;
+  originalAmount?: number;
+  finalAmount?: number;
+
   // Partial payment fields (private_event only)
   depositAmount: number;
   remainingAmount: number;
@@ -78,6 +87,15 @@ const bookingSchema = new Schema<IBooking>(
     durationHours: {
       type: Number
     },
+    couponUsed: {
+      type: Schema.Types.ObjectId,
+      ref: "Coupon"
+    },
+    couponCode: { type: String },
+    promoterName: { type: String },
+    discountApplied: { type: Number, default: 0 },
+    originalAmount: { type: Number },
+    finalAmount: { type: Number },
     depositAmount: {
       type: Number,
       default: 0
