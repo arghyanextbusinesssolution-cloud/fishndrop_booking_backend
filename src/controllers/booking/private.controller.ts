@@ -8,6 +8,29 @@ import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
 
+const LEAD_CONNECTOR_WEBHOOK_URL = process.env.LEAD_CONNECTOR_WEBHOOK_URL || "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/0793198e-4c46-4be5-8676-f73f1aa4666c";
+
+const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>) => {
+  if (!LEAD_CONNECTOR_WEBHOOK_URL) return;
+
+  try {
+    await fetch(LEAD_CONNECTOR_WEBHOOK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        source: "private_booking",
+        bookingId: booking._id?.toString?.() || booking.id,
+        bookingType: booking.bookingType,
+        bookingStatus: booking.status,
+        createdAt: booking.createdAt,
+        ...payload
+      })
+    });
+  } catch (error) {
+    console.warn("[Lead Connector] Failed to send private booking lead", error);
+  }
+};
+
 export const getPrivateAvailability = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const date = sanitizeString(req.query.date);
@@ -127,6 +150,42 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
+
+    await sendPrivateBookingLead(booking, {
+      name,
+      email,
+      phone,
+      bookingDate,
+      bookingTime,
+      partySize,
+      durationHours,
+      occasion,
+      notes,
+      depositAmount,
+      totalAmount: currentAmount,
+      remainingAmount,
+      customDepositAmount: req.body.customDepositAmount ? Number(req.body.customDepositAmount) : depositAmount,
+      couponApplied: Boolean(couponCode),
+      couponCode: couponCode || "",
+      couponDiscountAmount: discountApplied,
+      couponDetails: couponCode
+        ? { code: couponCode, discountAmount: discountApplied, promoterName: promoterName || "" }
+        : null,
+      bookingDetails: {
+        occasion,
+        notes,
+        partySize,
+        durationHours,
+        bookingDate,
+        bookingTime,
+        depositAmount,
+        totalAmount: currentAmount,
+        remainingAmount,
+        customDepositAmount: req.body.customDepositAmount ? Number(req.body.customDepositAmount) : depositAmount,
+      },
+      accountCreated,
+      userId: user!._id?.toString?.() || user!._id
+    });
 
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 
