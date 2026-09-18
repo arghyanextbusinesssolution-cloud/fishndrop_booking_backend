@@ -77,38 +77,49 @@ export const getAllBookings = async (req: Request, res: Response, next: NextFunc
     const dateQuery = sanitizeString(req.query.date);
     const skip = (page - 1) * limit;
 
-    const filter: any = {};
-    if (status) filter.status = status;
+    const baseFilter: any = {};
 
     if (dateQuery) {
       const { dayStart, dayEnd } = buildDayRange(dateQuery);
-      // Include the same -6h buffer to catch legacy dates if needed, 
-      // but buildDayRange already normalizes future ones
       const adjustedStart = new Date(dayStart.getTime() - 6 * 60 * 60 * 1000);
-      filter.bookingDate = { $gte: adjustedStart, $lte: dayEnd };
+      baseFilter.bookingDate = { $gte: adjustedStart, $lte: dayEnd };
     }
 
-    const [bookings, total] = await Promise.all([
+    const filter: any = { ...baseFilter };
+
+    if (status === "leads") {
+      filter.paymentStatus = "pending_payment";
+      filter.status = { $ne: "cancelled" };
+    } else if (status === "bookings") {
+      filter.paymentStatus = { $in: ["deposit_paid", "paid"] };
+      filter.status = { $ne: "cancelled" };
+    } else if (status === "cancelled") {
+      filter.status = "cancelled";
+    } else if (status && status !== "all") {
+      filter.status = status;
+    }
+
+    const [bookings, total, leadsCount, bookingsCount, cancelledCount, allCount] = await Promise.all([
       Booking.find(filter).populate("user", "name email").populate("tables").sort({ createdAt: -1 }).skip(skip).limit(limit),
-      Booking.countDocuments(filter)
+      Booking.countDocuments(filter),
+      Booking.countDocuments({ ...baseFilter, paymentStatus: "pending_payment", status: { $ne: "cancelled" } }),
+      Booking.countDocuments({ ...baseFilter, paymentStatus: { $in: ["deposit_paid", "paid"] }, status: { $ne: "cancelled" } }),
+      Booking.countDocuments({ ...baseFilter, status: "cancelled" }),
+      Booking.countDocuments(baseFilter)
     ]);
-
-    console.log(`[AdminController] Found ${bookings.length} bookings for filter:`, JSON.stringify(filter));
-    if (bookings.length > 0) {
-      console.log("[AdminController] First booking match sample:", {
-        id: bookings[0]._id,
-        date: bookings[0].bookingDate,
-        status: bookings[0].status,
-        tables: bookings[0].tables.map((t: any) => t.tableNumber)
-      });
-    }
 
     res.status(200).json({
       success: true,
       bookings,
       total,
       page,
-      totalPages: Math.ceil(total / limit)
+      totalPages: Math.ceil(total / limit),
+      counts: {
+        all: allCount,
+        leads: leadsCount,
+        bookings: bookingsCount,
+        cancelled: cancelledCount
+      }
     });
   } catch (error) {
     next(new Error("Failed to fetch bookings"));
