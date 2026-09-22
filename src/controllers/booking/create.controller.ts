@@ -5,6 +5,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
+import { sendGHLLeadEvent } from "../../utils/ghl.utils";
 
 export const validateCoupon = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -73,6 +74,8 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
       return;
     }
+
+    void sendGHLLeadEvent(result.booking);
 
     res.status(201).json({ success: true, booking: result.booking });
   } catch (error: any) {
@@ -147,6 +150,8 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       res.status(400).json({ success: false, message: result.error || "Booking creation failed" });
       return;
     }
+
+    void sendGHLLeadEvent(result.booking);
 
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 

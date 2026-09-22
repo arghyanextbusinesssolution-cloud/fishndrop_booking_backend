@@ -2,6 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import Booking from "../../models/Booking";
 import SlotLock from "../../models/SlotLock";
 import { sanitizeString } from "../../utils/time.utils";
+import { sendGHLCancelEvent } from "../../utils/ghl.utils";
 
 export const cancelBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -29,6 +30,8 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
     if (booking.bookingType === "private_event") {
       await SlotLock.deleteMany({ eventId: booking._id });
     }
+
+    void sendGHLCancelEvent(booking, "User/Admin requested cancellation");
 
     res.status(200).json({ success: true, message: "Booking cancelled successfully" });
   } catch (error) {

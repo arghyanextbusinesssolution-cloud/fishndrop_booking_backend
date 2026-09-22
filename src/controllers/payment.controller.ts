@@ -7,6 +7,7 @@ import Booking from "../models/Booking";
 import Coupon from "../models/Coupon";
 import logger from "../config/logger";
 import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
+import { sendGHLBookingEvent } from "../utils/ghl.utils";
 
 /** Keys copied from Stripe docs — they are not real and will not work with the API. */
 const INVALID_PLACEHOLDER_SECRETS = new Set([
@@ -79,6 +80,22 @@ function getStripe(): StripeClient | null {
   return stripeClient;
 }
 
+function computeChargeAmount(amountInDollars: number): number {
+  const secretKey = readStripeSecretKey();
+  const isOneDollarTesting =
+    process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT === "true" ||
+    process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT === "1" ||
+    (secretKey?.startsWith("sk_test_") && process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT !== "false");
+
+  if (isOneDollarTesting) {
+    logger.info(`[Stripe $1 Test Payment Mode] Charging $1.00 (100 cents) instead of $${amountInDollars} for test payment session.`);
+    return 100;
+  }
+
+  return Math.max(50, Math.round(amountInDollars * 100));
+}
+
+
 /**
  * Initial checkout session.
  * For private_event bookings: charges only the $200 deposit (booking.depositAmount).
@@ -126,7 +143,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     const tableNumbers = (booking.tables as any[]).map(t => t.tableNumber).join(", ");
 
     // Charge deposit amount (for private events this is $200, for standard it's the full amount)
-    const chargeAmount = Math.max(50, Math.round(booking.depositAmount * 100));
+    const chargeAmount = computeChargeAmount(booking.depositAmount);
 
     const isPrivate = booking.bookingType === "private_event";
     const depositLabel = isPrivate
@@ -218,7 +235,7 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
     }
 
     const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
-    const chargeAmount = Math.max(50, Math.round(booking.remainingAmount * 100));
+    const chargeAmount = computeChargeAmount(booking.remainingAmount);
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -278,7 +295,7 @@ export const createPaymentIntent = async (req: Request, res: Response, next: Nex
 
     // Create a PaymentIntent for the deposit amount
     const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.max(50, Math.round(booking.depositAmount * 100)),
+      amount: computeChargeAmount(booking.depositAmount),
       currency: "usd",
       automatic_payment_methods: {
         enabled: true,
@@ -353,6 +370,7 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
       await booking.save();
       logger.info(`Booking ${bookingId} – remaining balance marked as paid.`);
       void sendFullPaymentConfirmationViaEmailJS(booking);
+      void sendGHLBookingEvent(booking);
     } else {
       // Deposit paid
       if (booking.paymentStatus === "pending_payment") {
@@ -372,6 +390,7 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
         await booking.save();
         logger.info(`Booking ${bookingId} – deposit marked as paid. Remaining: $${booking.remainingAmount}`);
         void sendPaymentEmails(booking);
+        void sendGHLBookingEvent(booking);
       } else {
         // Idempotency: skip coupon increment if already paid.
         logger.info(`Booking ${bookingId} already marked as paid.`);
@@ -445,6 +464,7 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
       await booking.save();
       logger.info(`PaymentIntent Verification: Booking ${bookingId} remaining balance marked as paid.`);
       void sendFullPaymentConfirmationViaEmailJS(booking);
+      void sendGHLBookingEvent(booking);
     } else {
       if (booking.paymentStatus === "pending_payment") {
         if (booking.remainingAmount === 0) {
@@ -461,6 +481,7 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
         await booking.save();
         logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
         void sendPaymentEmails(booking);
+        void sendGHLBookingEvent(booking);
       }
 
       if (booking.remainingAmount > 0) {
@@ -520,6 +541,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
               await booking.save();
               logger.info(`Webhook: Booking ${bookingId} balance marked as paid.`);
               void sendFullPaymentConfirmationViaEmailJS(booking);
+              void sendGHLBookingEvent(booking);
             } else if (!isBalancePayment && booking.paymentStatus === "pending_payment") {
               if (booking.remainingAmount === 0) {
                 booking.paymentStatus = "paid";
@@ -535,6 +557,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
               await booking.save();
               logger.info(`Webhook: Booking ${bookingId} deposit marked as paid.`);
               void sendPaymentEmails(booking);
+              void sendGHLBookingEvent(booking);
 
               if (booking.remainingAmount > 0) {
                 const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";

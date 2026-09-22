@@ -7,6 +7,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
+import { sendGHLLeadEvent } from "../../utils/ghl.utils";
 
 const LEAD_CONNECTOR_WEBHOOK_URL = process.env.LEAD_CONNECTOR_WEBHOOK_URL || "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/0793198e-4c46-4be5-8676-f73f1aa4666c";
 
@@ -110,11 +111,12 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       }
     }
 
-    // Deposit = $200 for private events (or full current amount if < $200)
-    let depositAmount = Math.min(currentAmount, 200);
+    // Deposit = $1 minimum for private events (or full current amount if < $1)
+    let minDeposit = Math.min(currentAmount, 1);
+    let depositAmount = Math.min(currentAmount, 1);
     if (req.body.customDepositAmount) {
       const custom = Number(req.body.customDepositAmount);
-      if (!isNaN(custom) && custom >= depositAmount && custom <= currentAmount) {
+      if (!isNaN(custom) && custom >= minDeposit && custom <= currentAmount) {
         depositAmount = custom;
       }
     }
@@ -150,6 +152,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
+
+    void sendGHLLeadEvent(booking);
 
     await sendPrivateBookingLead(booking, {
       name,
