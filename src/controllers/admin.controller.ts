@@ -72,10 +72,10 @@ export const getAllTables = async (req: Request, res: Response, next: NextFuncti
 export const getAllBookings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const page = Number(req.query.page) > 0 ? Number(req.query.page) : 1;
-    const limit = Number(req.query.limit) > 0 ? Number(req.query.limit) : 10;
+    const limitRaw = req.query.limit;
+    const limit = limitRaw !== undefined ? Number(limitRaw) : 10;
     const status = sanitizeString(req.query.status);
     const dateQuery = sanitizeString(req.query.date);
-    const skip = (page - 1) * limit;
 
     const baseFilter: any = {};
 
@@ -99,8 +99,14 @@ export const getAllBookings = async (req: Request, res: Response, next: NextFunc
       filter.status = status;
     }
 
+    let queryExec = Booking.find(filter).populate("user", "name email").populate("tables").sort({ createdAt: -1 });
+    if (limit > 0) {
+      const skip = (page - 1) * limit;
+      queryExec = queryExec.skip(skip).limit(limit);
+    }
+
     const [bookings, total, leadsCount, bookingsCount, cancelledCount, allCount] = await Promise.all([
-      Booking.find(filter).populate("user", "name email").populate("tables").sort({ createdAt: -1 }).skip(skip).limit(limit),
+      queryExec,
       Booking.countDocuments(filter),
       Booking.countDocuments({ ...baseFilter, paymentStatus: "pending_payment", status: { $ne: "cancelled" } }),
       Booking.countDocuments({ ...baseFilter, paymentStatus: { $in: ["deposit_paid", "paid"] }, status: { $ne: "cancelled" } }),
@@ -113,7 +119,7 @@ export const getAllBookings = async (req: Request, res: Response, next: NextFunc
       bookings,
       total,
       page,
-      totalPages: Math.ceil(total / limit),
+      totalPages: limit > 0 ? Math.ceil(total / limit) : 1,
       counts: {
         all: allCount,
         leads: leadsCount,

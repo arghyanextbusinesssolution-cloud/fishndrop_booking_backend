@@ -82,10 +82,12 @@ function getStripe(): StripeClient | null {
 
 function computeChargeAmount(amountInDollars: number): number {
   const secretKey = readStripeSecretKey();
-  const isOneDollarTesting =
-    process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT === "true" ||
-    process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT === "1" ||
-    (secretKey?.startsWith("sk_test_") && process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT !== "false");
+  const rawEnv = (process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT || "").trim().toLowerCase();
+
+  const isExplicitlyDisabled = rawEnv === "false" || rawEnv === "0" || rawEnv === "off" || rawEnv === "no";
+  const isExplicitlyEnabled = rawEnv === "true" || rawEnv === "1" || rawEnv === "on" || rawEnv === "yes";
+
+  const isOneDollarTesting = !isExplicitlyDisabled && (isExplicitlyEnabled || secretKey?.startsWith("sk_test_"));
 
   if (isOneDollarTesting) {
     logger.info(`[Stripe $1 Test Payment Mode] Charging $1.00 (100 cents) instead of $${amountInDollars} for test payment session.`);

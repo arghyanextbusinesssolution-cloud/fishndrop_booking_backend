@@ -17,8 +17,10 @@ export const createBookingValidator = [
   body("customerEmail").isEmail().withMessage("Valid email is required"),
   body("customerPhone").isString().trim().isLength({ min: 7, max: 20 }).withMessage("Valid phone is required"),
   body("occasion")
-    .isIn(["birthday", "anniversary", "business", "quiet", "graduation", "other"])
-    .withMessage("Occasion must be birthday, anniversary, business, quiet, graduation, or other"),
+    .isString()
+    .trim()
+    .notEmpty()
+    .withMessage("Occasion is required"),
   body("notes").optional().isString().trim().isLength({ max: 500 }).withMessage("Notes must be up to 500 characters"),
   body("cakeDetails")
     .optional()
