@@ -9,7 +9,7 @@ import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
 import { sendGHLLeadEvent } from "../../utils/ghl.utils";
 
-const LEAD_CONNECTOR_WEBHOOK_URL = process.env.LEAD_CONNECTOR_WEBHOOK_URL || "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/0793198e-4c46-4be5-8676-f73f1aa4666c";
+const LEAD_CONNECTOR_WEBHOOK_URL = "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/68dcac67-ddc2-4765-87d7-9034ebe33001";
 
 const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>) => {
   if (!LEAD_CONNECTOR_WEBHOOK_URL) return;

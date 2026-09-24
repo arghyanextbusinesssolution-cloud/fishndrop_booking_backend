@@ -1,11 +1,7 @@
 import logger from "../config/logger";
 
 const getWebhookUrl = (): string => {
-  return (
-    process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
-    process.env.GHL_WEBHOOK_URL ||
-    "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/0793198e-4c46-4be5-8676-f73f1aa4666c"
-  );
+  return "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/68dcac67-ddc2-4765-87d7-9034ebe33001";
 };
 
 export interface GHLPayloadOptions {
