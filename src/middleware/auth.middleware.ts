@@ -29,8 +29,9 @@ const authMiddleware = async (req: Request, res: Response, next: NextFunction): 
       id: user._id.toString(),
       _id: user._id,
       role: user.role,
-      email: user.email,
-      name: user.name
+      email: user.email || "",
+      name: user.name || "",
+      phone: user.phone
     };
     next();
   } catch (error) {

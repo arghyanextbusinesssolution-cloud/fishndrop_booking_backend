@@ -86,9 +86,9 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
 
 export const createBookingWithAccount = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    let name = sanitizeString(req.body.customerName);
-    let email = sanitizeString(req.body.customerEmail).toLowerCase();
-    let phone = sanitizeString(req.body.customerPhone);
+    let name = sanitizeString(req.body.customerName || req.body.name);
+    let email = sanitizeString(req.body.customerEmail || req.body.email).toLowerCase();
+    let phone = sanitizeString(req.body.customerPhone || req.body.phone);
     const password = sanitizeString(req.body.password);
 
     let authenticatedUser = null;
@@ -106,27 +106,37 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
 
     if (authenticatedUser) {
       user = authenticatedUser;
-      name = user.name;
-      email = user.email;
-      phone = user.phone || phone;
+      name = name || user.name || "Guest User";
+      email = email || user.email || (phone ? `guest_${phone.replace(/\D/g, "")}@fishndrop.com` : `guest_${user._id}@fishndrop.com`);
+      phone = phone || user.phone;
+
+      let shouldSave = false;
+      if (name && (!user.name || user.name === "Guest User")) { user.name = name; shouldSave = true; }
+      if (email && !user.email) { user.email = email; shouldSave = true; }
+      if (shouldSave) await user.save();
     } else {
-      user = await User.findOne({ email }).select("+password");
+      if (phone) {
+        user = await User.findOne({ phone });
+      }
+      if (!user && email) {
+        user = await User.findOne({ email });
+      }
+
+      const cleanPhoneDigits = phone.replace(/\D/g, "");
+      if (!name) name = "Guest User";
+      if (!email) {
+        email = `guest_${cleanPhoneDigits || Date.now()}@fishndrop.com`;
+      }
+
       if (!user) {
-        const rawPassword = password || `Auto@${Math.floor(100000 + Math.random() * 900000)}`;
-        user = await User.create({ name, email, password: rawPassword, phone, role: "user" });
-        user = await User.findById(user._id).select("+password");
+        user = await User.create({ name, email, phone, isPhoneVerified: true, role: "user" });
         accountCreated = true;
       } else {
-        if (!password || !(await user.comparePassword(password))) {
-          res.status(409).json({ success: false, message: "Account exists. Please login with password to continue." });
-          return;
-        }
+        if (name && (!user.name || user.name === "Guest User")) user.name = name;
+        if (email && !user.email) user.email = email;
+        if (phone && !user.phone) user.phone = phone;
+        await user.save();
       }
-    }
-
-    if (user && !user.phone && phone) {
-      user.phone = phone;
-      await user.save();
     }
 
     const payload: BookingService.BookingPayload = {

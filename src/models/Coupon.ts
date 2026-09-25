@@ -37,7 +37,6 @@ const couponSchema = new Schema<ICoupon>(
     { timestamps: true }
 );
 
-couponSchema.index({ code: 1 });
 couponSchema.index({ status: 1 });
 
 const Coupon = model<ICoupon>("Coupon", couponSchema);

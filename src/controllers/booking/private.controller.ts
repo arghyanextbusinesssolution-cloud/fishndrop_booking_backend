@@ -50,9 +50,9 @@ export const getPrivateAvailability = async (req: Request, res: Response, next: 
 
 export const createPrivateEventWithAccount = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    let name = sanitizeString(req.body.customerName);
-    let email = sanitizeString(req.body.customerEmail).toLowerCase();
-    let phone = sanitizeString(req.body.customerPhone);
+    let name = sanitizeString(req.body.customerName || req.body.name);
+    let email = sanitizeString(req.body.customerEmail || req.body.email).toLowerCase();
+    let phone = sanitizeString(req.body.customerPhone || req.body.phone);
     const password = sanitizeString(req.body.password);
 
     const partySize = Number(req.body.partySize);
@@ -61,6 +61,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const durationHours = Number(req.body.durationHours) || 1;
     const notes = sanitizeString(req.body.notes);
     const occasion = sanitizeString(req.body.occasion);
+    const needDj = Boolean(req.body.needDj);
+    const cateringMenu = sanitizeString(req.body.cateringMenu);
 
     let authenticatedUser = null;
     const authHeader = req.headers.authorization;
@@ -76,27 +78,43 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     let accountCreated = false;
     if (authenticatedUser) {
       user = authenticatedUser;
-      name = user.name;
-      email = user.email;
-      phone = user.phone || phone;
+      name = name || user.name || "Guest User";
+      email = email || user.email || (phone ? `guest_${phone.replace(/\D/g, "")}@fishndrop.com` : `guest_${user._id}@fishndrop.com`);
+      phone = phone || user.phone;
+
+      let shouldSave = false;
+      if (name && (!user.name || user.name === "Guest User")) { user.name = name; shouldSave = true; }
+      if (email && !user.email) { user.email = email; shouldSave = true; }
+      if (shouldSave) await user.save();
     } else {
-      user = await User.findOne({ email }).select("+password");
+      if (phone) {
+        user = await User.findOne({ phone });
+      }
+      if (!user && email) {
+        user = await User.findOne({ email });
+      }
+
+      const cleanPhoneDigits = phone.replace(/\D/g, "");
+      if (!name) name = "Guest User";
+      if (!email) {
+        email = `guest_${cleanPhoneDigits || Date.now()}@fishndrop.com`;
+      }
+
       if (!user) {
-        const rawPassword = password || `Auto@${Math.floor(100000 + Math.random() * 900000)}`;
-        user = await User.create({ name, email, password: rawPassword, phone, role: "user" });
-        user = await User.findById(user._id).select("+password");
+        user = await User.create({ name, email, phone, isPhoneVerified: true, role: "user" });
         accountCreated = true;
       } else {
-        if (!password || !(await user.comparePassword(password))) {
-          res.status(409).json({ success: false, message: "Account exists. Please login with password to continue." });
-          return;
-        }
+        if (name && (!user.name || user.name === "Guest User")) user.name = name;
+        if (email && !user.email) user.email = email;
+        if (phone && !user.phone) user.phone = phone;
+        await user.save();
       }
     }
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const totalAmount = durationHours * 125;
+    const djCost = needDj ? 300 : 0;
+    const totalAmount = (durationHours * 125) + djCost;
     let currentAmount = totalAmount;
     let couponUsed, couponCode, promoterName, discountApplied = 0;
 
@@ -132,6 +150,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       customerPhone: phone,
       notes,
       occasion,
+      needDj,
+      cateringMenu,
       totalAmount: currentAmount,
       complimentaryDrinks: partySize * 2,
       bookingDate: parsedDate,
@@ -164,6 +184,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       partySize,
       durationHours,
       occasion,
+      needDj,
+      cateringMenu,
       notes,
       depositAmount,
       totalAmount: currentAmount,
@@ -177,6 +199,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
         : null,
       bookingDetails: {
         occasion,
+        needDj,
+        cateringMenu,
         notes,
         partySize,
         durationHours,

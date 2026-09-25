@@ -30,6 +30,8 @@ export interface IBooking extends Document {
   paymentStatus: "pending_payment" | "deposit_paid" | "paid";
   bookingType: "standard" | "private_event";
   durationHours?: number;
+  needDj?: boolean;
+  cateringMenu?: string;
 
   // Referral Coupon Fields
   couponUsed?: Types.ObjectId;
@@ -86,6 +88,14 @@ const bookingSchema = new Schema<IBooking>(
     },
     durationHours: {
       type: Number
+    },
+    needDj: {
+      type: Boolean,
+      default: false
+    },
+    cateringMenu: {
+      type: String,
+      trim: true
     },
     couponUsed: {
       type: Schema.Types.ObjectId,
