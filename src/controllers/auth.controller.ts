@@ -2,9 +2,19 @@ import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
 import { sendVerificationCode, checkVerificationCode } from "../services/twilioVerify.service";
+import { checkSmsQuota, recordSmsDispatch, getSmsQuotaStatus } from "../services/smsLimit.service";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
+
+export const getSmsQuota = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const quota = await getSmsQuotaStatus();
+    res.status(200).json({ success: true, quota });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
 
 export const sendOTP = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -14,7 +24,19 @@ export const sendOTP = async (req: Request, res: Response, next: NextFunction): 
       return;
     }
 
-    console.log(`\n🔑 [SEND OTP REQUEST] Initiating Twilio Verify for ${rawPhone}...`);
+    // 1. Enforce Daily Cap (50 SMS/day) & Per-Phone Rate Limit (3 requests/15 mins)
+    const quota = await checkSmsQuota(rawPhone);
+    if (!quota.allowed) {
+      res.status(429).json({
+        success: false,
+        message: quota.error,
+        phone: rawPhone,
+        remaining: quota.remaining
+      });
+      return;
+    }
+
+    console.log(`\n🔑 [SEND OTP REQUEST] Initiating Twilio Verify for ${rawPhone} (Quota remaining today: ${quota.remaining})...`);
 
     // Ensure user record exists in MongoDB
     await User.findOneAndUpdate(
@@ -37,6 +59,10 @@ export const sendOTP = async (req: Request, res: Response, next: NextFunction): 
           { $set: { otpCode: devOtp, otpExpires: new Date(Date.now() + 10 * 60 * 1000) } }
         );
         console.log(`\n🔑 [DEV FALLBACK] Twilio notice: ${result.error}. Dev OTP Code: ${devOtp}`);
+        
+        // Record dispatch attempt
+        await recordSmsDispatch(rawPhone, "dev_fallback");
+
         res.status(200).json({
           success: true,
           message: `Verification code generated (Dev OTP: ${devOtp})`,
@@ -55,11 +81,15 @@ export const sendOTP = async (req: Request, res: Response, next: NextFunction): 
       return;
     }
 
+    // Record live successful SMS dispatch in daily quota
+    const updatedQuota = await recordSmsDispatch(rawPhone, "sent");
+
     res.status(200).json({
       success: true,
       message: "Verification code sent successfully via SMS",
       phone: rawPhone,
-      status: result.status
+      status: result.status,
+      quotaRemaining: updatedQuota.remaining
     });
   } catch (error: any) {
     console.error("❌ [Send OTP Error]:", error);

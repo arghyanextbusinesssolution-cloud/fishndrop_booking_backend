@@ -1,6 +1,6 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { login, register, getMe, checkEmail, sendOTP, verifyOTP, updateProfile } from "../controllers/auth.controller";
+import { login, register, getMe, checkEmail, sendOTP, verifyOTP, updateProfile, getSmsQuota } from "../controllers/auth.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
 const authLimiter = rateLimit({
@@ -14,6 +14,7 @@ const authLimiter = rateLimit({
 const router = express.Router();
 router.use(authLimiter);
 
+router.get("/sms-quota", getSmsQuota);
 router.post("/send-otp", sendOTP);
 router.post("/verify-otp", verifyOTP);
 router.post("/update-profile", authMiddleware, updateProfile);
