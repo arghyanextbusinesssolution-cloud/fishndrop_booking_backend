@@ -223,17 +223,36 @@ export const register = async (req: Request, res: Response, next: NextFunction):
     const name = sanitizeString(req.body.name);
     const email = sanitizeString(req.body.email).toLowerCase();
     const phone = sanitizeString(req.body.phone);
+    const password = sanitizeString(req.body.password);
 
-    let user = await User.findOne({ phone });
-    if (!user && email) {
-      user = await User.findOne({ email });
+    if (!name) {
+      res.status(400).json({ success: false, message: "Name is required" });
+      return;
+    }
+
+    if (email) {
+      const existingUser = await User.findOne({ email });
+      if (existingUser) {
+        res.status(400).json({ success: false, message: "An account with this email address already exists. Please log in instead." });
+        return;
+      }
+    }
+
+    let user;
+    if (phone) {
+      user = await User.findOne({ phone });
     }
 
     if (!user) {
-      user = await User.create({ name, email, phone, isPhoneVerified: true });
+      const userData: any = { name, isPhoneVerified: !!phone };
+      if (email) userData.email = email;
+      if (phone) userData.phone = phone;
+      if (password) userData.password = password;
+      user = await User.create(userData);
     } else {
       if (name) user.name = name;
       if (email) user.email = email;
+      if (password) user.password = password;
       await user.save();
     }
 
@@ -244,12 +263,12 @@ export const register = async (req: Request, res: Response, next: NextFunction):
 
     res.status(200).json({ 
       success: true, 
-      message: "User registered/updated successfully", 
+      message: "User registered successfully", 
       token,
       user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role }
     });
-  } catch (error) {
-    next(new Error("Registration failed"));
+  } catch (error: any) {
+    next(new Error(`Registration failed: ${error.message}`));
   }
 };
 

@@ -1,4 +1,9 @@
-import twilio from "twilio";
+let twilioClientFactory: any = null;
+try {
+  twilioClientFactory = require("twilio");
+} catch (e) {
+  console.warn("Twilio package not found or failed to load. SMS OTP feature will run in fallback mode.");
+}
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -9,12 +14,12 @@ const getTwilioClient = () => {
   const token = process.env.TWILIO_AUTH_TOKEN || authToken;
   const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID || verifyServiceSid;
 
-  if (!sid || !token || !serviceSid) {
+  if (!sid || !token || !serviceSid || !twilioClientFactory) {
     throw new Error("Missing Twilio credentials or TWILIO_VERIFY_SERVICE_SID in environment");
   }
 
   return {
-    client: twilio(sid, token),
+    client: twilioClientFactory(sid, token),
     serviceSid
   };
 };

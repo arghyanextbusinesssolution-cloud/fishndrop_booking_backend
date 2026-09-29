@@ -108,7 +108,7 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       user = authenticatedUser;
       name = name || user.name || "Guest User";
       email = email || user.email || (phone ? `guest_${phone.replace(/\D/g, "")}@fishndrop.com` : `guest_${user._id}@fishndrop.com`);
-      phone = phone || user.phone;
+      phone = phone || user.phone || "";
 
       let shouldSave = false;
       if (name && (!user.name || user.name === "Guest User")) { user.name = name; shouldSave = true; }

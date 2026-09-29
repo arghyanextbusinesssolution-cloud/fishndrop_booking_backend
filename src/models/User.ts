@@ -4,7 +4,7 @@ import { Document, Model, Schema, model } from "mongoose";
 export interface IUser extends Document {
   name?: string;
   email?: string;
-  phone: string;
+  phone?: string;
   password?: string;
   role: "user" | "admin";
   otpCode?: string;
@@ -20,7 +20,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     name: { type: String, trim: true, maxlength: 50 },
     email: { type: String, lowercase: true, trim: true, unique: true, sparse: true },
     password: { type: String, required: false, select: false },
-    phone: { type: String, required: true, trim: true, unique: true, sparse: true },
+    phone: { type: String, required: false, trim: true, unique: true, sparse: true },
     role: { type: String, enum: ["user", "admin"], default: "user" },
     otpCode: { type: String, select: false },
     otpExpires: { type: Date, select: false },
