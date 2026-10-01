@@ -5,9 +5,9 @@ const getWebhookUrl = (): string => {
 };
 
 export interface GHLPayloadOptions {
-  event: "lead_created" | "booking_confirmed" | "booking_canceled";
+  event: "lead_created" | "booking_confirmed" | "booking_canceled" | "zelle_payment_submitted";
   leadStatus: "lead" | "booking" | "canceled";
-  ghlTag: "Website Lead" | "Booking Confirmed" | "Booking Canceled";
+  ghlTag: "Website Lead" | "Booking Confirmed" | "Booking Canceled" | "Zelle Payment Pending";
   reason?: string;
 }
 
@@ -45,6 +45,9 @@ const sendToGHL = async (booking: any, options: GHLPayloadOptions) => {
       remainingAmount: booking.remainingAmount || 0,
       status: booking.status || "pending",
       paymentStatus: booking.paymentStatus || "pending_payment",
+      paymentMethod: booking.paymentMethod || "card",
+      zelleProofUrl: booking.zelleProofUrl || "",
+      zelleVerificationStatus: booking.zelleVerificationStatus || "none",
       occasion: booking.occasion || "",
       notes: booking.notes || "",
       couponCode: booking.couponCode || "",
@@ -88,6 +91,18 @@ export const sendGHLBookingEvent = async (booking: any): Promise<void> => {
     event: "booking_confirmed",
     leadStatus: "booking",
     ghlTag: "Booking Confirmed"
+  });
+};
+
+/**
+ * Triggered when Zelle payment proof/details are submitted, pending GHL verification.
+ * Sends event: "zelle_payment_submitted" | Tag: "Zelle Payment Pending"
+ */
+export const sendGHLZellePendingEvent = async (booking: any): Promise<void> => {
+  await sendToGHL(booking, {
+    event: "zelle_payment_submitted",
+    leadStatus: "lead",
+    ghlTag: "Zelle Payment Pending"
   });
 };
 

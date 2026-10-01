@@ -47,6 +47,17 @@ export interface IBooking extends Document {
   remainingPaymentStatus: "unpaid" | "paid";
   remainingPaymentReminderSent: boolean;
   remainingPaymentSessionId?: string;
+
+  // Zelle Payment & GHL Verification Fields
+  paymentMethod?: "card" | "zelle";
+  zelleProofUrl?: string;
+  remainingZelleProofUrl?: string;
+  zelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
+  zelleTransactionId?: string;
+  zelleNotes?: string;
+  zelleUploadedAt?: Date;
+  createdAt?: Date;
+  updatedAt?: Date;
 }
 
 const bookingSchema = new Schema<IBooking>(
@@ -125,6 +136,35 @@ const bookingSchema = new Schema<IBooking>(
     },
     remainingPaymentSessionId: {
       type: String
+    },
+    paymentMethod: {
+      type: String,
+      enum: ["card", "zelle"],
+      default: "card"
+    },
+    zelleProofUrl: {
+      type: String,
+      default: ""
+    },
+    remainingZelleProofUrl: {
+      type: String,
+      default: ""
+    },
+    zelleVerificationStatus: {
+      type: String,
+      enum: ["none", "pending_ghl_verification", "verified", "mismatched", "manual_review"],
+      default: "none"
+    },
+    zelleTransactionId: {
+      type: String,
+      default: ""
+    },
+    zelleNotes: {
+      type: String,
+      default: ""
+    },
+    zelleUploadedAt: {
+      type: Date
     }
   },
   { timestamps: true }

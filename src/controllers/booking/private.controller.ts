@@ -7,7 +7,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
-import { sendGHLLeadEvent } from "../../utils/ghl.utils";
+import { sendGHLLeadEvent, sendGHLZellePendingEvent } from "../../utils/ghl.utils";
 
 const LEAD_CONNECTOR_WEBHOOK_URL = "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/68dcac67-ddc2-4765-87d7-9034ebe33001";
 
@@ -141,6 +141,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const remainingAmount = currentAmount - depositAmount;
     const remainingPaymentStatus = remainingAmount === 0 ? "paid" : "unpaid";
 
+    const isZelle = req.body.paymentMethod === "zelle";
+    const zelleProofUrl = sanitizeString(req.body.zelleProofUrl);
+
     const booking = await Booking.create({
       user: user!._id,
       tables: allTables.map(t => t._id),
@@ -168,12 +171,20 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       promoterName,
       discountApplied,
       originalAmount: totalAmount,
-      finalAmount: currentAmount
+      finalAmount: currentAmount,
+      paymentMethod: isZelle ? "zelle" : "card",
+      zelleProofUrl: zelleProofUrl || "",
+      zelleVerificationStatus: isZelle ? "pending_ghl_verification" : "none",
+      zelleUploadedAt: isZelle && zelleProofUrl ? new Date() : undefined
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
 
-    void sendGHLLeadEvent(booking);
+    if (isZelle) {
+      void sendGHLZellePendingEvent(booking);
+    } else {
+      void sendGHLLeadEvent(booking);
+    }
 
     await sendPrivateBookingLead(booking, {
       name,

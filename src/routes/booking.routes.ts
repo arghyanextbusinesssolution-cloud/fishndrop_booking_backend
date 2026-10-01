@@ -9,7 +9,8 @@ import {
   getUserBookings,
   getPrivateAvailability,
   createPrivateEventWithAccount,
-  getVenueCapacity
+  getVenueCapacity,
+  getPublicBookingStatus
 } from "../controllers/booking";
 import authMiddleware from "../middleware/auth.middleware";
 import validate from "../middleware/validate.middleware";
@@ -22,6 +23,7 @@ const router = express.Router();
 router.get("/availability", getAvailability);
 router.get("/private-availability", getPrivateAvailability);
 router.get("/venue-capacity", getVenueCapacity);
+router.get("/public-status/:id", getPublicBookingStatus);
 router.post("/reserve", createBookingValidator, validate, createBookingWithAccount);
 router.post("/reserve-private", createPrivateEventWithAccount);
 router.post("/validate-coupon", validateCoupon);

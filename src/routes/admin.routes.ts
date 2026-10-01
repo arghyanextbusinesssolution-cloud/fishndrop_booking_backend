@@ -10,7 +10,8 @@ import {
   getSlotLocks,
   getPaymentSummary,
   deleteTable,
-  deleteBooking
+  deleteBooking,
+  verifyAdminZelleBooking
 } from "../controllers/admin.controller";
 import adminOnly from "../middleware/admin.middleware";
 import authMiddleware from "../middleware/auth.middleware";
@@ -27,6 +28,7 @@ router.delete("/tables/:id", deleteTable);
 router.patch("/slots/lock", setSlotLock);
 router.get("/slot-locks", getSlotLocks);
 router.get("/bookings", getAllBookings);
+router.patch("/bookings/:id/verify-zelle", verifyAdminZelleBooking);
 router.delete("/bookings/:id", deleteBooking);
 router.get("/stats", getTableStats);
 router.get("/payments/summary", getPaymentSummary);

@@ -1,11 +1,27 @@
 import express from "express";
-import { createCheckoutSession, createPaymentIntent, createRemainingCheckoutSession, handleStripeWebhook, verifyCheckoutSession, verifyPaymentIntent } from "../controllers/payment.controller";
+import {
+  createCheckoutSession,
+  createPaymentIntent,
+  createRemainingCheckoutSession,
+  handleStripeWebhook,
+  verifyCheckoutSession,
+  verifyPaymentIntent,
+  uploadZelleProof,
+  handleGHLZelleWebhook
+} from "../controllers/payment.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
 const router = express.Router();
 
 // Webhook must be public and handle raw body for signature verification
 router.post("/webhook", express.raw({ type: "application/json" }), handleStripeWebhook);
+
+// GHL Secure Zelle verification webhook (Public, validated by secret key/header)
+router.post("/zelle-webhook", express.json(), handleGHLZelleWebhook);
+router.post("/zelle/webhook", express.json(), handleGHLZelleWebhook);
+
+// Zelle proof upload
+router.post("/upload-zelle-proof", express.json({ limit: "15mb" }), uploadZelleProof);
 
 // Protected routes - need express.json() manually because they are mounted before the global parser in index.ts
 router.post("/checkout-session", express.json(), authMiddleware, createCheckoutSession);

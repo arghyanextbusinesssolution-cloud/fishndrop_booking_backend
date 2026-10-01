@@ -24,6 +24,8 @@ export interface BookingPayload {
   promoterName?: string;
   discountType?: "percentage" | "fixed";
   discountValue?: number;
+  paymentMethod?: "card" | "zelle";
+  zelleProofUrl?: string;
 }
 
 export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => {
@@ -69,6 +71,8 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     finalAmount = Math.max(0, originalAmount - discountApplied);
   }
 
+  const isZelle = payload.paymentMethod === "zelle";
+
   const booking = await Booking.create({
     user: payload.userId,
     tables: assignment.tables.map((table) => table._id),
@@ -94,7 +98,11 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     promoterName: payload.promoterName,
     discountApplied,
     originalAmount,
-    finalAmount
+    finalAmount,
+    paymentMethod: isZelle ? "zelle" : "card",
+    zelleProofUrl: payload.zelleProofUrl || "",
+    zelleVerificationStatus: isZelle ? "pending_ghl_verification" : "none",
+    zelleUploadedAt: isZelle && payload.zelleProofUrl ? new Date() : undefined
   });
 
   return { booking };

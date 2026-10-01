@@ -5,7 +5,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
-import { sendGHLLeadEvent } from "../../utils/ghl.utils";
+import { sendGHLLeadEvent, sendGHLZellePendingEvent } from "../../utils/ghl.utils";
 
 export const validateCoupon = async (req: Request, res: Response): Promise<void> => {
   try {
@@ -55,7 +55,9 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       cakeDetails: sanitizeString(req.body.cakeDetails),
       customCakeDetails: req.body.customCakeDetails,
       cakePrice: Number(req.body.cakePrice || 0),
-      allowSplit: req.body.allowSplit === true
+      allowSplit: req.body.allowSplit === true,
+      paymentMethod: req.body.paymentMethod === "zelle" ? "zelle" : "card",
+      zelleProofUrl: sanitizeString(req.body.zelleProofUrl)
     };
 
     if (req.body.couponCode) {
@@ -75,7 +77,11 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    void sendGHLLeadEvent(result.booking);
+    if (result.booking.paymentMethod === "zelle") {
+      void sendGHLZellePendingEvent(result.booking);
+    } else {
+      void sendGHLLeadEvent(result.booking);
+    }
 
     res.status(201).json({ success: true, booking: result.booking });
   } catch (error: any) {
@@ -152,7 +158,9 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       cakeDetails: sanitizeString(req.body.cakeDetails),
       customCakeDetails: req.body.customCakeDetails,
       cakePrice: Number(req.body.cakePrice || 0),
-      allowSplit: req.body.allowSplit === true
+      allowSplit: req.body.allowSplit === true,
+      paymentMethod: req.body.paymentMethod === "zelle" ? "zelle" : "card",
+      zelleProofUrl: sanitizeString(req.body.zelleProofUrl)
     };
 
     const result = await BookingService.reserveTablesAndCreateBooking(payload);
@@ -161,7 +169,11 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       return;
     }
 
-    void sendGHLLeadEvent(result.booking);
+    if (result.booking.paymentMethod === "zelle") {
+      void sendGHLZellePendingEvent(result.booking);
+    } else {
+      void sendGHLLeadEvent(result.booking);
+    }
 
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 

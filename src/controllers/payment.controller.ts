@@ -6,8 +6,16 @@ import { loadEnvFiles } from "../config/loadEnv";
 import Booking from "../models/Booking";
 import Coupon from "../models/Coupon";
 import logger from "../config/logger";
+import { v2 as cloudinary } from "cloudinary";
 import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
-import { sendGHLBookingEvent } from "../utils/ghl.utils";
+import { sendGHLBookingEvent, sendGHLZellePendingEvent } from "../utils/ghl.utils";
+
+// Configure Cloudinary explicitly
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME || "dxx54fccl",
+  api_key: process.env.CLOUDINARY_API_KEY || "149937643231624",
+  api_secret: process.env.CLOUDINARY_API_SECRET || "whOZPJleA7xJeu_R8kckqq3Lprc"
+});
 
 /** Keys copied from Stripe docs — they are not real and will not work with the API. */
 const INVALID_PLACEHOLDER_SECRETS = new Set([
@@ -586,3 +594,178 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
 
   res.json({ received: true });
 };
+
+/**
+ * Screenshot proof upload endpoint.
+ * For initial deposit (isBalance=false): uploads to zelleProofUrl, keeps status pending.
+ * For remaining balance (isBalance=true): uploads to remainingZelleProofUrl, keeps remainingPaymentStatus unpaid.
+ * CRITICAL: Screenshot upload alone DOES NOT confirm payment — awaits GHL verification or Admin approval.
+ */
+export const uploadZelleProof = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { bookingId, imageBase64, isBalance } = req.body;
+    if (!bookingId || !imageBase64) {
+      res.status(400).json({ success: false, message: "bookingId and imageBase64 are required" });
+      return;
+    }
+
+    const booking = await Booking.findById(bookingId);
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    const isBalancePayment = isBalance === true || isBalance === "true";
+    const folderName = isBalancePayment ? "fishndrop_zelle_balance_proofs" : "fishndrop_zelle_proofs";
+
+    const result = await cloudinary.uploader.upload(imageBase64, {
+      folder: folderName,
+      resource_type: "image"
+    });
+
+    booking.paymentMethod = "zelle";
+    booking.zelleUploadedAt = new Date();
+
+    if (isBalancePayment) {
+      // ── Remaining Balance Zelle Proof ──
+      booking.remainingZelleProofUrl = result.secure_url;
+      // Mark for verification — don't clear remainingPaymentStatus yet
+      booking.zelleVerificationStatus = "pending_ghl_verification";
+      // Don't confirm — stays at deposit_paid until GHL/admin clears the balance
+      logger.info(`[Zelle Balance Upload] Remaining balance screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Awaiting GHL balance verification.`);
+    } else {
+      // ── Initial Deposit Zelle Proof ──
+      booking.zelleProofUrl = result.secure_url;
+      booking.zelleVerificationStatus = "pending_ghl_verification";
+      booking.status = "pending";
+      booking.paymentStatus = "pending_payment";
+      logger.info(`[Zelle Upload] Deposit screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Remaining PENDING for GHL verification.`);
+    }
+
+    await booking.save();
+
+    void sendGHLZellePendingEvent(booking);
+
+    res.status(200).json({
+      success: true,
+      message: isBalancePayment
+        ? "Remaining balance Zelle proof uploaded. Pending GHL balance verification."
+        : "Zelle deposit proof uploaded. Pending GHL email verification.",
+      zelleProofUrl: isBalancePayment ? result.secure_url : booking.zelleProofUrl,
+      isBalance: isBalancePayment,
+      booking
+    });
+  } catch (error: any) {
+    logger.error("[Zelle Proof Upload Error]", error);
+    next(new Error(`Failed to upload Zelle proof: ${error.message}`));
+  }
+};
+
+/**
+ * GHL Secure Verification Webhook
+ * Called by GoHighLevel when it parses a Zelle confirmation email.
+ * Supports two payment types:
+ *   paymentType = "deposit" (default): verifies initial deposit, confirms booking & locks slot.
+ *   paymentType = "balance": verifies remaining balance, marks booking as fully paid.
+ * Missing or mismatched details -> flagged for manual review.
+ */
+export const handleGHLZelleWebhook = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const webhookSecret = process.env.GHL_ZELLE_WEBHOOK_SECRET || "fishndrop_zelle_secure_secret_2026";
+    const headerSecret = req.headers["x-ghl-secret"] || req.query.secret;
+
+    if (headerSecret && headerSecret !== webhookSecret) {
+      logger.warn("[GHL Zelle Webhook] Unauthorized caller — secret mismatch");
+      res.status(401).json({ success: false, message: "Unauthorized webhook secret" });
+      return;
+    }
+
+    const { bookingId, amount, transactionId, status: ghlStatus, notes, paymentType } = req.body;
+
+    if (!bookingId) {
+      res.status(400).json({ success: false, message: "bookingId is required" });
+      return;
+    }
+
+    const booking = await Booking.findById(bookingId).populate("tables");
+    if (!booking) {
+      res.status(404).json({ success: false, message: `Booking ${bookingId} not found` });
+      return;
+    }
+
+    const isBalancePayment = paymentType === "balance";
+    const receivedAmount = Number(amount || 0);
+
+    // Determine expected amount based on payment type
+    let expectedAmount: number;
+    if (isBalancePayment) {
+      expectedAmount = booking.remainingAmount || 0;
+    } else {
+      expectedAmount = booking.bookingType === "private_event" ? booking.depositAmount : booking.totalAmount;
+    }
+
+    const isAmountMatch = Math.abs(receivedAmount - expectedAmount) < 0.05;
+    const isStatusValid = ghlStatus !== "failed" && ghlStatus !== "mismatched";
+
+    if (isAmountMatch && isStatusValid) {
+      booking.zelleTransactionId = transactionId || `GHL-ZEL-${Date.now()}`;
+
+      if (isBalancePayment) {
+        // ✅ Balance cleared — mark fully paid!
+        booking.paymentStatus = "paid";
+        booking.remainingPaymentStatus = "paid";
+        booking.remainingAmount = 0;
+        booking.zelleVerificationStatus = "verified";
+        booking.zelleNotes = notes || "Balance verified automatically via GHL Zelle email parser";
+        logger.info(`[GHL Zelle Webhook] Booking ${bookingId} BALANCE CLEARED — fully paid via Zelle.`);
+      } else {
+        // ✅ Deposit verified — confirm booking & lock slot
+        booking.status = "confirmed";
+        booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
+        booking.zelleVerificationStatus = "verified";
+        booking.zelleNotes = notes || "Verified automatically via GHL Zelle payment email parser";
+        logger.info(`[GHL Zelle Webhook] Booking ${bookingId} CONFIRMED & SLOT LOCKED via GHL Zelle verification.`);
+      }
+
+      if (booking.couponUsed) {
+        await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } }).catch(e => logger.error("Coupon increment error", e));
+      }
+
+      await booking.save();
+
+      void sendPaymentEmails(booking);
+      void sendGHLBookingEvent(booking);
+
+      res.status(200).json({
+        success: true,
+        message: isBalancePayment
+          ? "Remaining balance confirmed and booking marked as fully paid."
+          : "Booking confirmed and slot locked successfully via GHL Zelle verification.",
+        booking
+      });
+    } else {
+      // ⚠️ Missing or mismatched payment details -> Manual review
+      booking.zelleVerificationStatus = "mismatched";
+      booking.zelleNotes = notes || `Payment detail mismatch: Expected $${expectedAmount.toFixed(2)}, received $${receivedAmount.toFixed(2)}. Flagged for manual review.`;
+
+      if (!isBalancePayment) {
+        booking.status = "pending";
+        booking.paymentStatus = "pending_payment";
+      }
+
+      await booking.save();
+      logger.warn(`[GHL Zelle Webhook] Booking ${bookingId} MISMATCHED ${isBalancePayment ? "(balance)" : "(deposit)"}. Expected $${expectedAmount}, got $${receivedAmount}.`);
+
+      res.status(200).json({
+        success: false,
+        status: "manual_review",
+        message: "Missing or mismatched payment details. Booking flagged for manual review.",
+        booking
+      });
+    }
+  } catch (error: any) {
+    logger.error("[GHL Zelle Webhook Error]", error);
+    next(new Error(`GHL Zelle Webhook error: ${error.message}`));
+  }
+};
+

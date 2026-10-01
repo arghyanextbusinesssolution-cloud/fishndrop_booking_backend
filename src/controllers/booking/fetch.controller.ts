@@ -53,6 +53,42 @@ export const getBookingById = async (req: Request, res: Response, next: NextFunc
   }
 };
 
+export const getPublicBookingStatus = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const bookingId = sanitizeString(req.params.id);
+    const booking = await Booking.findById(bookingId).populate("tables").select("-user");
+
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      booking: {
+        _id: booking._id,
+        customerName: booking.customerName,
+        customerEmail: booking.customerEmail,
+        bookingDate: booking.bookingDate,
+        bookingTime: booking.bookingTime,
+        partySize: booking.partySize,
+        bookingType: booking.bookingType,
+        totalAmount: booking.totalAmount,
+        depositAmount: booking.depositAmount,
+        status: booking.status,
+        paymentStatus: booking.paymentStatus,
+        paymentMethod: booking.paymentMethod,
+        zelleProofUrl: booking.zelleProofUrl,
+        zelleVerificationStatus: booking.zelleVerificationStatus,
+        zelleNotes: booking.zelleNotes,
+        createdAt: booking.createdAt
+      }
+    });
+  } catch (error) {
+    next(new Error("Failed to fetch public booking status"));
+  }
+};
+
 export const getVenueCapacity = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const allTables = await Table.find();

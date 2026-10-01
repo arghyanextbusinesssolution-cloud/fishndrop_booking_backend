@@ -4,6 +4,8 @@ import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
 import DailyTableLock from "../models/DailyTableLock";
 import { buildDayRange } from "../utils/time.utils";
+import { sendPaymentEmails } from "../utils/email.utils";
+import { sendGHLBookingEvent } from "../utils/ghl.utils";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -394,5 +396,42 @@ export const deleteBooking = async (req: Request, res: Response, next: NextFunct
     res.status(200).json({ success: true, message: "Booking deleted successfully" });
   } catch (error) {
     next(new Error("Failed to delete booking"));
+  }
+};
+
+/** Manually confirm or reject Zelle payment from Admin Panel */
+export const verifyAdminZelleBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const bookingId = req.params.id;
+    const { action, notes } = req.body; // action: "verify" | "reject"
+
+    const booking = await Booking.findById(bookingId).populate("tables");
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    if (action === "verify") {
+      booking.status = "confirmed";
+      booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
+      booking.zelleVerificationStatus = "verified";
+      booking.zelleNotes = notes || "Manually verified by Administrator";
+      await booking.save();
+
+      void sendPaymentEmails(booking);
+      void sendGHLBookingEvent(booking);
+
+      res.status(200).json({ success: true, message: "Booking manually verified and confirmed", booking });
+    } else {
+      booking.status = "pending";
+      booking.paymentStatus = "pending_payment";
+      booking.zelleVerificationStatus = "mismatched";
+      booking.zelleNotes = notes || "Manually rejected/flagged as mismatched by Administrator";
+      await booking.save();
+
+      res.status(200).json({ success: true, message: "Booking marked as mismatched", booking });
+    }
+  } catch (error) {
+    next(new Error("Failed to process manual Zelle verification"));
   }
 };
