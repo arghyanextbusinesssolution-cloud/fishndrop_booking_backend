@@ -4,7 +4,7 @@ import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
 import DailyTableLock from "../models/DailyTableLock";
 import { buildDayRange } from "../utils/time.utils";
-import { sendPaymentEmails } from "../utils/email.utils";
+import { sendPaymentEmails, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
 import { sendGHLBookingEvent } from "../utils/ghl.utils";
 
 const sanitizeString = (value: unknown): string =>
@@ -403,7 +403,7 @@ export const deleteBooking = async (req: Request, res: Response, next: NextFunct
 export const verifyAdminZelleBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const bookingId = req.params.id;
-    const { action, notes } = req.body; // action: "verify" | "reject"
+    const { action, notes, proofType } = req.body; // action: "verify" | "reject", proofType?: "deposit" | "balance"
 
     const booking = await Booking.findById(bookingId).populate("tables");
     if (!booking) {
@@ -411,25 +411,53 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
       return;
     }
 
-    if (action === "verify") {
-      booking.status = "confirmed";
-      booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
-      booking.zelleVerificationStatus = "verified";
-      booking.zelleNotes = notes || "Manually verified by Administrator";
-      await booking.save();
+    const isBalanceVerification =
+      proofType === "balance" ||
+      (Boolean(booking.remainingZelleProofUrl) && booking.remainingPaymentStatus !== "paid");
 
-      void sendPaymentEmails(booking);
+    if (action === "verify") {
+      if (isBalanceVerification) {
+        // Clear remaining balance!
+        booking.remainingPaymentStatus = "paid";
+        booking.paymentStatus = "paid";
+        booking.remainingAmount = 0;
+        booking.remainingZelleVerificationStatus = "verified";
+        booking.status = "confirmed";
+        booking.zelleNotes = notes || "Remaining balance manually verified by Administrator";
+        await booking.save();
+
+        void sendFullPaymentConfirmationViaEmailJS(booking);
+      } else {
+        // Clear deposit
+        booking.status = "confirmed";
+        booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
+        if (booking.paymentStatus === "paid") {
+          booking.remainingPaymentStatus = "paid";
+          booking.remainingAmount = 0;
+        }
+        booking.zelleVerificationStatus = "verified";
+        booking.zelleNotes = notes || "Deposit manually verified by Administrator";
+        await booking.save();
+
+        void sendPaymentEmails(booking);
+      }
+
       void sendGHLBookingEvent(booking);
 
-      res.status(200).json({ success: true, message: "Booking manually verified and confirmed", booking });
+      res.status(200).json({ success: true, message: "Zelle payment manually verified and updated successfully", booking });
     } else {
-      booking.status = "pending";
-      booking.paymentStatus = "pending_payment";
-      booking.zelleVerificationStatus = "mismatched";
-      booking.zelleNotes = notes || "Manually rejected/flagged as mismatched by Administrator";
+      if (isBalanceVerification) {
+        booking.remainingZelleVerificationStatus = "mismatched";
+        booking.zelleNotes = notes || "Remaining balance Zelle payment flagged as mismatched by Administrator";
+      } else {
+        booking.status = "pending";
+        booking.paymentStatus = "pending_payment";
+        booking.zelleVerificationStatus = "mismatched";
+        booking.zelleNotes = notes || "Deposit Zelle payment flagged as mismatched by Administrator";
+      }
       await booking.save();
 
-      res.status(200).json({ success: true, message: "Booking marked as mismatched", booking });
+      res.status(200).json({ success: true, message: "Zelle payment marked as mismatched", booking });
     }
   } catch (error) {
     next(new Error("Failed to process manual Zelle verification"));

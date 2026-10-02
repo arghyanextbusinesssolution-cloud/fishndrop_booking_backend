@@ -629,10 +629,9 @@ export const uploadZelleProof = async (req: Request, res: Response, next: NextFu
     if (isBalancePayment) {
       // ── Remaining Balance Zelle Proof ──
       booking.remainingZelleProofUrl = result.secure_url;
-      // Mark for verification — don't clear remainingPaymentStatus yet
-      booking.zelleVerificationStatus = "pending_ghl_verification";
-      // Don't confirm — stays at deposit_paid until GHL/admin clears the balance
-      logger.info(`[Zelle Balance Upload] Remaining balance screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Awaiting GHL balance verification.`);
+      // Mark balance for verification — keep initial deposit status intact!
+      booking.remainingZelleVerificationStatus = "pending_ghl_verification";
+      logger.info(`[Zelle Balance Upload] Remaining balance screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Awaiting GHL/Admin balance verification.`);
     } else {
       // ── Initial Deposit Zelle Proof ──
       booking.zelleProofUrl = result.secure_url;

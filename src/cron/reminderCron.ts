@@ -8,7 +8,7 @@ import {
 } from "../utils/email.utils";
 
 export const startReminderCron = () => {
-    logger.info("Initializing 48-hour email reminder cron job...");
+    logger.info("Initializing 72-hour email reminder cron job...");
 
     // Runs every hour
     cron.schedule("0 * * * *", async () => {
@@ -31,9 +31,9 @@ export const startReminderCron = () => {
                 const diffMs = bookingDateTime.getTime() - now.getTime();
                 const diffMins = diffMs / (1000 * 60);
 
-                // Remaining Payment Reminder: 48 hours (2880 mins) or less before the booking
-                if (diffMins > 0 && diffMins <= (48 * 60) && !booking.remainingPaymentReminderSent) {
-                    logger.info(`[Reminder Cron] Sending 48-hour remaining balance reminder for private event booking ${booking._id}`);
+                // Remaining Payment Reminder: 72 hours (4320 mins) or less before the booking
+                if (diffMins > 0 && diffMins <= (72 * 60) && !booking.remainingPaymentReminderSent) {
+                    logger.info(`[Reminder Cron] Sending 72-hour remaining balance reminder for private event booking ${booking._id}`);
 
                     const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
                     // Deep link specifically built for the user payment interface

@@ -53,6 +53,7 @@ export interface IBooking extends Document {
   zelleProofUrl?: string;
   remainingZelleProofUrl?: string;
   zelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
+  remainingZelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
   zelleTransactionId?: string;
   zelleNotes?: string;
   zelleUploadedAt?: Date;
@@ -151,6 +152,11 @@ const bookingSchema = new Schema<IBooking>(
       default: ""
     },
     zelleVerificationStatus: {
+      type: String,
+      enum: ["none", "pending_ghl_verification", "verified", "mismatched", "manual_review"],
+      default: "none"
+    },
+    remainingZelleVerificationStatus: {
       type: String,
       enum: ["none", "pending_ghl_verification", "verified", "mismatched", "manual_review"],
       default: "none"
