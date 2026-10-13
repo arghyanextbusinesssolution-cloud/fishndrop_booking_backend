@@ -39,20 +39,21 @@ export const checkSmsQuota = async (
     };
   }
 
-  // 2. Per-phone throttling check (Max 3 attempts per 15 minutes)
+  // 2. Per-phone throttling check (Max 6 attempts in production, 30 in dev per 15 minutes)
   if (usage?.phoneLogs && usage.phoneLogs.length > 0) {
     const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
     const recentAttempts = usage.phoneLogs.filter(
       (log) => log.phone === cleanPhone && new Date(log.timestamp) >= fifteenMinsAgo
     );
 
-    if (recentAttempts.length >= 3) {
-      console.warn(`[SMS Rate Limit] Phone ${cleanPhone} exceeded 3 requests in 15 minutes.`);
+    const maxAttempts = process.env.NODE_ENV === "development" ? 30 : 6;
+    if (recentAttempts.length >= maxAttempts) {
+      console.warn(`[SMS Rate Limit] Phone ${cleanPhone} exceeded ${maxAttempts} requests in 15 minutes.`);
       return {
         allowed: false,
         currentCount,
         remaining: Math.max(0, limit - currentCount),
-        error: "Too many verification requests for this number. Please wait 15 minutes before trying again."
+        error: "Too many verification requests for this number. Please wait a few minutes before trying again."
       };
     }
   }
@@ -118,3 +119,20 @@ export const getSmsQuotaStatus = async () => {
     remaining: Math.max(0, limit - count)
   };
 };
+
+/**
+ * Clears the phone throttle log for a verified number
+ */
+export const clearPhoneSmsAttempts = async (rawPhone: string) => {
+  try {
+    const todayKey = getTodayKey();
+    const cleanPhone = rawPhone.replace(/[^\d+]/g, "");
+    await SmsUsage.updateOne(
+      { date: todayKey },
+      { $pull: { phoneLogs: { phone: cleanPhone } } }
+    );
+  } catch (err: any) {
+    console.warn("Could not clear phone throttle log:", err.message);
+  }
+};
+

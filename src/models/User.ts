@@ -6,7 +6,7 @@ export interface IUser extends Document {
   email?: string;
   phone?: string;
   password?: string;
-  role: "user" | "admin";
+  role: "user" | "admin" | "owner" | "staff";
   otpCode?: string;
   otpExpires?: Date;
   isPhoneVerified?: boolean;
@@ -21,7 +21,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     email: { type: String, lowercase: true, trim: true, unique: true, sparse: true },
     password: { type: String, required: false, select: false },
     phone: { type: String, required: false, trim: true, unique: true, sparse: true },
-    role: { type: String, enum: ["user", "admin"], default: "user" },
+    role: { type: String, enum: ["user", "admin", "owner", "staff"], default: "user" },
     otpCode: { type: String, select: false },
     otpExpires: { type: Date, select: false },
     isPhoneVerified: { type: Boolean, default: false }

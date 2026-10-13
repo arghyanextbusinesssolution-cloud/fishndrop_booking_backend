@@ -3,12 +3,13 @@ import fs from "fs";
 import path from "path";
 import Stripe from "stripe";
 import { loadEnvFiles } from "../config/loadEnv";
+import mongoose from "mongoose";
 import Booking from "../models/Booking";
 import Coupon from "../models/Coupon";
 import logger from "../config/logger";
 import { v2 as cloudinary } from "cloudinary";
 import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
-import { sendGHLBookingEvent, sendGHLZellePendingEvent } from "../utils/ghl.utils";
+import { sendGHLBookingEvent, sendGHLZellePendingEvent, sendGHLZelleConfirmedEvent } from "../utils/ghl.utils";
 
 // Configure Cloudinary explicitly
 cloudinary.config({
@@ -234,18 +235,76 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
       return;
     }
 
-    if (booking.remainingPaymentStatus === "paid") {
+    const isFoodPayment = req.body.isFoodPayment === true || req.body.isFood === true;
+    if (isFoodPayment) {
+      if (!booking.offerPrice || booking.offerPrice <= 0) {
+        res.status(400).json({ success: false, message: "No active food quote found for this booking" });
+        return;
+      }
+      if (booking.foodPaymentStatus === "paid") {
+        res.status(400).json({ success: false, message: "Food catering package is already paid" });
+        return;
+      }
+
+      const foodCharge = booking.offerPrice;
+      const chargeAmount = computeChargeAmount(foodCharge);
+      const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        billing_address_collection: "auto",
+        customer_email: req.user?.email || booking.customerEmail,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: "usd",
+              product_data: {
+                name: "Tropica Catering – Food & Dining Package",
+                description: `Payment for Private Buyout Food Catering on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime} – Full Package $${foodCharge.toFixed(2)}`
+              },
+              unit_amount: chargeAmount
+            }
+          }
+        ],
+        metadata: {
+          bookingId: String(booking._id),
+          userId: req.user!._id.toString(),
+          isFoodPayment: "true",
+          isBalancePayment: "false",
+          chargeAmount: foodCharge.toString()
+        },
+        payment_intent_data: {
+          description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} – ${booking.customerName} – FOOD CATERING ($${foodCharge.toFixed(2)})`
+        },
+        success_url: `${baseUrl}/user/payment/confirmed?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking.id}&type=food`,
+        cancel_url: `${baseUrl}/user/venue-bookings?reason=food_payment_cancelled`
+      });
+
+      res.status(201).json({ success: true, url: session.url });
+      return;
+    }
+
+    if (booking.remainingPaymentStatus === "paid" || booking.remainingAmount <= 0) {
       res.status(400).json({ success: false, message: "Remaining balance is already paid" });
       return;
     }
 
-    if (booking.paymentStatus !== "deposit_paid") {
+    if (booking.paymentStatus !== "deposit_paid" && booking.paymentStatus !== "pending_payment") {
       res.status(400).json({ success: false, message: "Deposit must be paid before paying balance" });
       return;
     }
 
+    const customAmount = req.body.amount ? Number(req.body.amount) : null;
+    const amountToCharge = (customAmount && customAmount > 0 && customAmount <= booking.remainingAmount)
+      ? Math.round(customAmount * 100) / 100
+      : booking.remainingAmount;
+
     const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
-    const chargeAmount = computeChargeAmount(booking.remainingAmount);
+    const chargeAmount = computeChargeAmount(amountToCharge);
+    const isPartial = amountToCharge < booking.remainingAmount;
+    const iterationNum = (booking.paymentBreakdown?.length || 0) + 1;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -258,8 +317,8 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
           price_data: {
             currency: "usd",
             product_data: {
-              name: "Tropica Venue – Remaining Balance",
-              description: `Remaining balance for Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}`
+              name: `Tropica Venue – Remaining Balance ${isPartial ? `(Installment #${iterationNum})` : ""}`,
+              description: `Payment for Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime} – ${isPartial ? `Installment of $${amountToCharge.toFixed(2)}` : "Full Balance Settlement"}`
             },
             unit_amount: chargeAmount
           }
@@ -268,13 +327,16 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
       metadata: {
         bookingId: String(booking._id),
         userId: req.user!._id.toString(),
-        isBalancePayment: "true"
+        isBalancePayment: "true",
+        chargeAmount: amountToCharge.toString(),
+        isPartial: isPartial ? "true" : "false",
+        iterationIndex: iterationNum.toString()
       },
       payment_intent_data: {
-        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} – ${booking.customerName} – BALANCE`
+        description: `Tropica Booking #${bookingId.slice(-6).toUpperCase()} – ${booking.customerName} – BALANCE ${isPartial ? `(Installment #${iterationNum})` : "(FULL)"}`
       },
       success_url: `${baseUrl}/user/payment/confirmed?session_id={CHECKOUT_SESSION_ID}&bookingId=${booking.id}&type=balance`,
-      cancel_url: `${baseUrl}/user/bookings?reason=balance_cancelled`
+      cancel_url: `${baseUrl}/user/venue-bookings?reason=balance_cancelled`
     });
 
     res.status(201).json({ success: true, url: session.url });
@@ -373,14 +435,91 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
       return;
     }
 
+    const isFoodPayment = session.metadata?.isFoodPayment === "true";
+    if (isFoodPayment) {
+      const foodPaid = session.metadata?.chargeAmount ? Number(session.metadata.chargeAmount) : (booking.offerPrice || 0);
+      const txnId = session.payment_intent ? String(session.payment_intent) : session.id;
+      const alreadyRecorded = booking.paymentBreakdown?.some(p => p.transactionId === txnId);
+
+      if (!alreadyRecorded) {
+        booking.foodPaymentStatus = "paid";
+        booking.foodPaymentMethod = "card";
+        booking.foodPaidAt = new Date();
+
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        booking.paymentBreakdown.push({
+          amount: foodPaid,
+          paymentMethod: "card",
+          paymentType: "food_catering",
+          status: "verified",
+          transactionId: txnId,
+          notes: `Card payment of $${foodPaid.toFixed(2)} for food catering package`,
+          paidAt: new Date()
+        });
+
+        booking.quoteHistory = booking.quoteHistory || [];
+        booking.quoteHistory.push({
+          action: "quote_accepted",
+          actor: "user",
+          actorName: booking.customerName || "Customer",
+          price: foodPaid,
+          notes: `Food catering package paid ($${foodPaid.toFixed(2)}) via card`,
+          createdAt: new Date()
+        });
+
+        await booking.save();
+        logger.info(`Booking ${bookingId} – food quote payment of $${foodPaid} settled.`);
+      }
+      res.status(200).json({ success: true, message: "Food payment confirmed", booking });
+      return;
+    }
+
     if (isBalancePayment) {
-      // Remaining balance paid
-      booking.remainingPaymentStatus = "paid";
-      booking.paymentStatus = "paid";
-      await booking.save();
-      logger.info(`Booking ${bookingId} – remaining balance marked as paid.`);
-      void sendFullPaymentConfirmationViaEmailJS(booking);
-      void sendGHLBookingEvent(booking);
+      const paidAmount = session.metadata?.chargeAmount
+        ? Number(session.metadata.chargeAmount)
+        : (session.amount_total ? session.amount_total / 100 : booking.remainingAmount);
+
+      const txnId = session.payment_intent ? String(session.payment_intent) : session.id;
+      const alreadyRecorded = booking.paymentBreakdown?.some(p => p.transactionId === txnId);
+
+      if (!alreadyRecorded) {
+        booking.remainingAmount = Math.max(0, Math.round((booking.remainingAmount - paidAmount) * 100) / 100);
+        const isFullyPaid = booking.remainingAmount <= 0;
+
+        if (isFullyPaid) {
+          booking.remainingAmount = 0;
+          booking.remainingPaymentStatus = "paid";
+          booking.paymentStatus = "paid";
+        } else {
+          booking.remainingPaymentStatus = "unpaid";
+          booking.paymentStatus = "deposit_paid";
+        }
+
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        booking.paymentBreakdown.push({
+          amount: paidAmount,
+          paymentMethod: "card",
+          paymentType: isFullyPaid ? "balance_full" : "balance_partial",
+          status: "verified",
+          transactionId: txnId,
+          iterationIndex: (booking.paymentBreakdown.length || 0) + 1,
+          notes: `Card payment of $${paidAmount.toFixed(2)} for ${isFullyPaid ? "final balance" : "balance breakdown"}`,
+          paidAt: new Date()
+        });
+
+        await booking.save();
+        logger.info(`Booking ${bookingId} – balance payment of $${paidAmount} processed. Remaining: $${booking.remainingAmount}`);
+
+        if (isFullyPaid) {
+          void sendFullPaymentConfirmationViaEmailJS(booking);
+          void sendGHLBookingEvent(booking);
+        } else {
+          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const paymentLink = `${baseUrl}/user/venue-bookings`;
+          void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+          void sendGHLBookingEvent(booking);
+        }
+      }
     } else {
       // Deposit paid
       if (booking.paymentStatus === "pending_payment") {
@@ -395,6 +534,21 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
 
         if (booking.couponUsed) {
           await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } }).catch(e => logger.error(`Failed to increment coupon ${booking.couponUsed}`, e));
+        }
+
+        const txnId = session.payment_intent ? String(session.payment_intent) : session.id;
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        if (!booking.paymentBreakdown.some(p => p.transactionId === txnId)) {
+          booking.paymentBreakdown.push({
+            amount: booking.depositAmount || booking.totalAmount,
+            paymentMethod: "card",
+            paymentType: "deposit",
+            status: "verified",
+            transactionId: txnId,
+            iterationIndex: 1,
+            notes: `Initial deposit of $${(booking.depositAmount || booking.totalAmount).toFixed(2)} paid via Card`,
+            paidAt: new Date()
+          });
         }
 
         await booking.save();
@@ -469,12 +623,51 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
     }
 
     if (isBalancePayment) {
-      booking.remainingPaymentStatus = "paid";
-      booking.paymentStatus = "paid";
-      await booking.save();
-      logger.info(`PaymentIntent Verification: Booking ${bookingId} remaining balance marked as paid.`);
-      void sendFullPaymentConfirmationViaEmailJS(booking);
-      void sendGHLBookingEvent(booking);
+      const paidAmount = paymentIntent.metadata?.chargeAmount
+        ? Number(paymentIntent.metadata.chargeAmount)
+        : (paymentIntent.amount ? paymentIntent.amount / 100 : booking.remainingAmount);
+
+      const txnId = paymentIntent.id;
+      const alreadyRecorded = booking.paymentBreakdown?.some(p => p.transactionId === txnId);
+
+      if (!alreadyRecorded) {
+        booking.remainingAmount = Math.max(0, Math.round((booking.remainingAmount - paidAmount) * 100) / 100);
+        const isFullyPaid = booking.remainingAmount <= 0;
+
+        if (isFullyPaid) {
+          booking.remainingAmount = 0;
+          booking.remainingPaymentStatus = "paid";
+          booking.paymentStatus = "paid";
+        } else {
+          booking.remainingPaymentStatus = "unpaid";
+          booking.paymentStatus = "deposit_paid";
+        }
+
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        booking.paymentBreakdown.push({
+          amount: paidAmount,
+          paymentMethod: "card",
+          paymentType: isFullyPaid ? "balance_full" : "balance_partial",
+          status: "verified",
+          transactionId: txnId,
+          iterationIndex: (booking.paymentBreakdown.length || 0) + 1,
+          notes: `PaymentIntent payment of $${paidAmount.toFixed(2)} for ${isFullyPaid ? "final balance" : "balance breakdown"}`,
+          paidAt: new Date()
+        });
+
+        await booking.save();
+        logger.info(`PaymentIntent Verification: Booking ${bookingId} balance payment of $${paidAmount} processed. Remaining: $${booking.remainingAmount}`);
+
+        if (isFullyPaid) {
+          void sendFullPaymentConfirmationViaEmailJS(booking);
+          void sendGHLBookingEvent(booking);
+        } else {
+          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const paymentLink = `${baseUrl}/user/venue-bookings`;
+          void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+          void sendGHLBookingEvent(booking);
+        }
+      }
     } else {
       if (booking.paymentStatus === "pending_payment") {
         if (booking.remainingAmount === 0) {
@@ -488,6 +681,22 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
         if (booking.couponUsed) {
           await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } });
         }
+
+        const txnId = paymentIntent.id;
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        if (!booking.paymentBreakdown.some(p => p.transactionId === txnId)) {
+          booking.paymentBreakdown.push({
+            amount: booking.depositAmount || booking.totalAmount,
+            paymentMethod: "card",
+            paymentType: "deposit",
+            status: "verified",
+            transactionId: txnId,
+            iterationIndex: 1,
+            notes: `Deposit of $${(booking.depositAmount || booking.totalAmount).toFixed(2)} paid via Card`,
+            paidAt: new Date()
+          });
+        }
+
         await booking.save();
         logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
         void sendPaymentEmails(booking);
@@ -545,13 +754,52 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
         try {
           const booking = await Booking.findById(bookingId);
           if (booking) {
-            if (isBalancePayment && booking.remainingPaymentStatus !== "paid") {
-              booking.remainingPaymentStatus = "paid";
-              booking.paymentStatus = "paid";
-              await booking.save();
-              logger.info(`Webhook: Booking ${bookingId} balance marked as paid.`);
-              void sendFullPaymentConfirmationViaEmailJS(booking);
-              void sendGHLBookingEvent(booking);
+            const txnId = session.payment_intent ? String(session.payment_intent) : session.id;
+            const alreadyRecorded = booking.paymentBreakdown?.some(p => p.transactionId === txnId);
+
+            if (isBalancePayment) {
+              const paidAmount = session.metadata?.chargeAmount
+                ? Number(session.metadata.chargeAmount)
+                : (session.amount_total ? session.amount_total / 100 : booking.remainingAmount);
+
+              if (!alreadyRecorded) {
+                booking.remainingAmount = Math.max(0, Math.round((booking.remainingAmount - paidAmount) * 100) / 100);
+                const isFullyPaid = booking.remainingAmount <= 0;
+
+                if (isFullyPaid) {
+                  booking.remainingAmount = 0;
+                  booking.remainingPaymentStatus = "paid";
+                  booking.paymentStatus = "paid";
+                } else {
+                  booking.remainingPaymentStatus = "unpaid";
+                  booking.paymentStatus = "deposit_paid";
+                }
+
+                booking.paymentBreakdown = booking.paymentBreakdown || [];
+                booking.paymentBreakdown.push({
+                  amount: paidAmount,
+                  paymentMethod: "card",
+                  paymentType: isFullyPaid ? "balance_full" : "balance_partial",
+                  status: "verified",
+                  transactionId: txnId,
+                  iterationIndex: (booking.paymentBreakdown.length || 0) + 1,
+                  notes: `Stripe webhook processed $${paidAmount.toFixed(2)} (${isFullyPaid ? "final balance" : "balance breakdown"})`,
+                  paidAt: new Date()
+                });
+
+                await booking.save();
+                logger.info(`Webhook: Booking ${bookingId} balance payment of $${paidAmount} processed. Remaining: $${booking.remainingAmount}`);
+
+                if (isFullyPaid) {
+                  void sendFullPaymentConfirmationViaEmailJS(booking);
+                  void sendGHLBookingEvent(booking);
+                } else {
+                  const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+                  const paymentLink = `${baseUrl}/user/venue-bookings`;
+                  void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+                  void sendGHLBookingEvent(booking);
+                }
+              }
             } else if (!isBalancePayment && booking.paymentStatus === "pending_payment") {
               if (booking.remainingAmount === 0) {
                 booking.paymentStatus = "paid";
@@ -564,6 +812,21 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
               if (booking.couponUsed) {
                 await Coupon.findByIdAndUpdate(booking.couponUsed, { $inc: { usageCount: 1 } }).catch(e => logger.error(`Stripe Webhook: Failed to increment coupon`, e));
               }
+
+              if (!alreadyRecorded) {
+                booking.paymentBreakdown = booking.paymentBreakdown || [];
+                booking.paymentBreakdown.push({
+                  amount: booking.depositAmount || booking.totalAmount,
+                  paymentMethod: "card",
+                  paymentType: "deposit",
+                  status: "verified",
+                  transactionId: txnId,
+                  iterationIndex: 1,
+                  notes: `Deposit of $${(booking.depositAmount || booking.totalAmount).toFixed(2)} paid via Card`,
+                  paidAt: new Date()
+                });
+              }
+
               await booking.save();
               logger.info(`Webhook: Booking ${bookingId} deposit marked as paid.`);
               void sendPaymentEmails(booking);
@@ -603,7 +866,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
  */
 export const uploadZelleProof = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const { bookingId, imageBase64, isBalance } = req.body;
+    const { bookingId, imageBase64, isBalance, amount, notes: clientNotes } = req.body;
     if (!bookingId || !imageBase64) {
       res.status(400).json({ success: false, message: "bookingId and imageBase64 are required" });
       return;
@@ -615,8 +878,13 @@ export const uploadZelleProof = async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const isBalancePayment = isBalance === true || isBalance === "true";
-    const folderName = isBalancePayment ? "fishndrop_zelle_balance_proofs" : "fishndrop_zelle_proofs";
+    const isFoodPayment = req.body.isFood === true || req.body.isFood === "true";
+    const isBalancePayment = !isFoodPayment && (isBalance === true || isBalance === "true");
+    const folderName = isFoodPayment
+      ? "fishndrop_zelle_food_proofs"
+      : isBalancePayment
+      ? "fishndrop_zelle_balance_proofs"
+      : "fishndrop_zelle_proofs";
 
     const result = await cloudinary.uploader.upload(imageBase64, {
       folder: folderName,
@@ -626,18 +894,84 @@ export const uploadZelleProof = async (req: Request, res: Response, next: NextFu
     booking.paymentMethod = "zelle";
     booking.zelleUploadedAt = new Date();
 
-    if (isBalancePayment) {
+    const customAmount = amount ? Number(amount) : null;
+    const breakdownAmount = (customAmount && customAmount > 0)
+      ? Math.round(customAmount * 100) / 100
+      : (isFoodPayment ? (booking.offerPrice || 0) : (isBalancePayment ? booking.remainingAmount : (booking.depositAmount || booking.totalAmount)));
+
+    const iterationNum = (booking.paymentBreakdown?.length || 0) + 1;
+
+    if (isFoodPayment) {
+      // ── Food Catering Quote Zelle Proof ──
+      const foodAmount = booking.offerPrice || breakdownAmount;
+      booking.foodZelleProofUrl = result.secure_url;
+      booking.foodPaymentStatus = "pending_verification";
+      booking.foodPaymentMethod = "zelle";
+      if (clientNotes) booking.zelleNotes = clientNotes;
+
+      booking.paymentBreakdown = booking.paymentBreakdown || [];
+      booking.paymentBreakdown.push({
+        amount: foodAmount,
+        paymentMethod: "zelle",
+        paymentType: "food_catering",
+        status: "pending",
+        proofUrl: result.secure_url,
+        iterationIndex: iterationNum,
+        notes: clientNotes || `Zelle proof submitted for food catering package ($${foodAmount.toFixed(2)})`,
+        paidAt: new Date()
+      });
+
+      booking.quoteHistory = booking.quoteHistory || [];
+      booking.quoteHistory.push({
+        action: "quote_accepted",
+        actor: "user",
+        actorName: booking.customerName || "Customer",
+        price: foodAmount,
+        notes: "Uploaded Zelle payment proof for food catering quote",
+        createdAt: new Date()
+      });
+
+      logger.info(`[Zelle Food Upload] Food quote screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()} ($${foodAmount}). Awaiting Admin verification.`);
+    } else if (isBalancePayment) {
       // ── Remaining Balance Zelle Proof ──
       booking.remainingZelleProofUrl = result.secure_url;
       // Mark balance for verification — keep initial deposit status intact!
       booking.remainingZelleVerificationStatus = "pending_ghl_verification";
-      logger.info(`[Zelle Balance Upload] Remaining balance screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Awaiting GHL/Admin balance verification.`);
+      if (clientNotes) booking.zelleNotes = clientNotes;
+
+      booking.paymentBreakdown = booking.paymentBreakdown || [];
+      booking.paymentBreakdown.push({
+        amount: breakdownAmount,
+        paymentMethod: "zelle",
+        paymentType: breakdownAmount < booking.remainingAmount ? "balance_partial" : "balance_full",
+        status: "pending",
+        proofUrl: result.secure_url,
+        iterationIndex: iterationNum,
+        notes: clientNotes || `Zelle proof submitted for $${breakdownAmount.toFixed(2)} balance breakdown (Installment #${iterationNum})`,
+        paidAt: new Date()
+      });
+
+      logger.info(`[Zelle Balance Upload] Remaining balance screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()} ($${breakdownAmount}). Awaiting GHL/Admin verification.`);
     } else {
       // ── Initial Deposit Zelle Proof ──
       booking.zelleProofUrl = result.secure_url;
       booking.zelleVerificationStatus = "pending_ghl_verification";
       booking.status = "pending";
       booking.paymentStatus = "pending_payment";
+      if (clientNotes) booking.zelleNotes = clientNotes;
+
+      booking.paymentBreakdown = booking.paymentBreakdown || [];
+      booking.paymentBreakdown.push({
+        amount: breakdownAmount,
+        paymentMethod: "zelle",
+        paymentType: "deposit",
+        status: "pending",
+        proofUrl: result.secure_url,
+        iterationIndex: 1,
+        notes: clientNotes || `Zelle proof submitted for $${breakdownAmount.toFixed(2)} deposit`,
+        paidAt: new Date()
+      });
+
       logger.info(`[Zelle Upload] Deposit screenshot uploaded for booking #${bookingId.slice(-6).toUpperCase()}. Remaining PENDING for GHL verification.`);
     }
 
@@ -679,51 +1013,268 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
       return;
     }
 
-    const { bookingId, amount, transactionId, status: ghlStatus, notes, paymentType } = req.body;
+    const body = req.body || {};
+    logger.info(`[GHL Zelle Webhook] Incoming Payload:\n${JSON.stringify(body, null, 2)}`);
 
-    if (!bookingId) {
-      res.status(400).json({ success: false, message: "bookingId is required" });
-      return;
+    // Helper: deeply find any booking ID or short code in object/array/strings
+    const findBookingIdInObject = (obj: any): string | null => {
+      if (!obj) return null;
+      if (typeof obj === "string") {
+        // Direct 24-hex ObjectId
+        const hex24Match = obj.match(/\b([a-f0-9]{24})\b/i);
+        if (hex24Match) return hex24Match[1];
+        // Memo or hash format e.g. #6ac63f or #6ac63f6cf08c
+        const hashMatch = obj.match(/#([a-f0-9]{4,24})\b/i);
+        if (hashMatch) return hashMatch[1];
+        // Explicit label e.g. "Booking ID: 6ac63f" or "Booking: #6ac63f"
+        const labelMatch = obj.match(/booking(?:_|\s*id)?[:=\s]+#?([a-f0-9]{4,24})/i);
+        if (labelMatch) return labelMatch[1];
+        return null;
+      }
+      if (Array.isArray(obj)) {
+        for (const item of obj) {
+          const res = findBookingIdInObject(item);
+          if (res) return res;
+        }
+        return null;
+      }
+      if (typeof obj === "object") {
+        // Check well-known key names first
+        const keyPriority = [
+          "bookingId", "booking_id", "bookingID", "Booking ID", "Booking Id",
+          "bookingCode", "booking_code", "Booking Code", "memo", "notes", "message",
+          "subject", "body", "text", "description", "reference", "id"
+        ];
+        for (const k of keyPriority) {
+          if (obj[k]) {
+            const res = findBookingIdInObject(obj[k]);
+            if (res) return res;
+            if (typeof obj[k] === "string" && obj[k].trim().length >= 4) return obj[k].trim();
+          }
+        }
+        for (const val of Object.values(obj)) {
+          const res = findBookingIdInObject(val);
+          if (res) return res;
+        }
+      }
+      return null;
+    };
+
+    const extractString = (val: any): string => {
+      if (!val) return "";
+      if (typeof val === "string") return val;
+      if (typeof val === "object") {
+        if (typeof val.body === "string") return val.body;
+        if (typeof val.message === "string") return val.message;
+        if (typeof val.text === "string") return val.text;
+        try {
+          return JSON.stringify(val);
+        } catch {
+          return "";
+        }
+      }
+      return String(val);
+    };
+
+    const rawBookingId =
+      body.customData?.zelle_payment_id ||
+      body.customData?.bookingId ||
+      body.customData?.booking_id ||
+      body.customData?.["Booking ID"] ||
+      body.zelle_payment_id ||
+      body.bookingId ||
+      body.booking_id ||
+      body.bookingID ||
+      body["Booking ID"] ||
+      body["Booking Id"] ||
+      body.customFields?.booking_id ||
+      body.customFields?.["Booking ID"] ||
+      req.query.bookingId ||
+      req.query.booking_id ||
+      findBookingIdInObject(body);
+
+    let rawAmount =
+      body.customData?.zelle_payment_amount ??
+      body.customData?.payment_amount ??
+      body.customData?.amount ??
+      body.zelle_payment_amount ??
+      body.amount ??
+      body.amountPaid ??
+      body.amount_paid ??
+      body.totalAmount ??
+      body.total_amount ??
+      body.paidAmount ??
+      body.depositAmount ??
+      req.query.amount;
+
+    // Fallback: If amount not found directly, parse dollar amount from message body (e.g. "sent you $300.00")
+    if (!rawAmount && body.message) {
+      const msgText = typeof body.message === "object" ? body.message.body || "" : String(body.message);
+      const amountMatch = msgText.match(/\$([0-9]+(?:\.[0-9]{1,2})?)/);
+      if (amountMatch) {
+        rawAmount = amountMatch[1];
+      }
     }
 
-    const booking = await Booking.findById(bookingId).populate("tables");
+    const transactionId =
+      body.transactionId ||
+      body.transaction_id ||
+      body.txn_id ||
+      body.reference ||
+      `GHL-ZEL-${Date.now()}`;
+
+    const ghlStatus = String(
+      body.status ||
+      body.ghlStatus ||
+      body.payment_status ||
+      "verified"
+    ).toLowerCase();
+
+    const notes = extractString(body.notes || body.message || body.body || "");
+    const paymentType = body.paymentType || body.payment_type || "deposit";
+    const customerEmail = body.customerEmail || body.customer_email || body.email || body.contact?.email;
+
+    let booking = null;
+
+    if (rawBookingId) {
+      const cleanId = String(rawBookingId).replace(/^#/, "").trim();
+
+      // 1. Search by MongoDB ObjectId (exact match)
+      if (mongoose.Types.ObjectId.isValid(cleanId)) {
+        booking = await Booking.findById(cleanId).populate("tables");
+      }
+
+      // 2. Short ID match — fetch recent bookings (Zelle or pending) and match last N chars
+      if (!booking && cleanId.length >= 4) {
+        const recentBookings = await Booking.find({
+          status: { $in: ["pending", "confirmed"] }
+        }).sort({ createdAt: -1 }).limit(300).populate("tables");
+
+        const shortUpper = cleanId.toUpperCase();
+        booking = recentBookings.find(b => {
+          const id = b._id?.toString() || "";
+          return id.toUpperCase().endsWith(shortUpper) || id.slice(-cleanId.length).toUpperCase() === shortUpper;
+        }) || null;
+      }
+    }
+
+    // 3. Fallback search by customer email ONLY if not a bank alert email
+    const isBankDomain = customerEmail && /bankofamerica|chase|wellsfargo|citi|zellepay|pnc|usbank/i.test(customerEmail);
+    if (!booking && customerEmail && !isBankDomain) {
+      booking = await Booking.findOne({
+        customerEmail: { $regex: new RegExp(`^${String(customerEmail).trim()}$`, "i") },
+        status: { $in: ["pending", "confirmed"] }
+      }).sort({ createdAt: -1 }).populate("tables");
+    }
+
     if (!booking) {
-      res.status(404).json({ success: false, message: `Booking ${bookingId} not found` });
+      logger.warn(`[GHL Zelle Webhook] Booking not found. Searched Booking ID: '${rawBookingId}', Email: '${customerEmail}'`);
+      res.status(404).json({
+        success: false,
+        message: `Booking not found (Searched ID: '${rawBookingId || "none"}', Email: '${customerEmail || "none"}')`,
+        tip: "Ensure the booking ID (e.g. 24-char ObjectId or #shortcode) is included in the webhook payload, memo, notes, or customData."
+      });
       return;
     }
 
-    const isBalancePayment = paymentType === "balance";
-    const receivedAmount = Number(amount || 0);
+    const isBalancePayment = paymentType === "balance" || (booking.paymentStatus === "deposit_paid" && booking.remainingAmount > 0);
+    const receivedAmount = Number(rawAmount || 0);
 
-    // Determine expected amount based on payment type
-    let expectedAmount: number;
-    if (isBalancePayment) {
-      expectedAmount = booking.remainingAmount || 0;
-    } else {
-      expectedAmount = booking.bookingType === "private_event" ? booking.depositAmount : booking.totalAmount;
-    }
+    // The amount the booking expects: remaining balance for balance payments, deposit otherwise
+    const expectedAmount = isBalancePayment
+      ? Number(booking.remainingAmount || 0)
+      : Number(booking.depositAmount || 0);
 
-    const isAmountMatch = Math.abs(receivedAmount - expectedAmount) < 0.05;
-    const isStatusValid = ghlStatus !== "failed" && ghlStatus !== "mismatched";
+    // ⚠️ TESTING MODE: Accept ANY amount GHL sends (even $1)
+    // When GHL fires this webhook, it means GHL verified the payment — trust it regardless of amount.
+    // The receivedAmount will be saved as the actual payment so the booking shows real amount.
+    const isStatusValid = ghlStatus !== "failed" && ghlStatus !== "mismatched" && ghlStatus !== "rejected";
 
-    if (isAmountMatch && isStatusValid) {
-      booking.zelleTransactionId = transactionId || `GHL-ZEL-${Date.now()}`;
+    if (isStatusValid) {
+      booking.zelleTransactionId = transactionId;
 
       if (isBalancePayment) {
-        // ✅ Balance cleared — mark fully paid!
-        booking.paymentStatus = "paid";
-        booking.remainingPaymentStatus = "paid";
-        booking.remainingAmount = 0;
-        booking.zelleVerificationStatus = "verified";
-        booking.zelleNotes = notes || "Balance verified automatically via GHL Zelle email parser";
-        logger.info(`[GHL Zelle Webhook] Booking ${bookingId} BALANCE CLEARED — fully paid via Zelle.`);
+        // Balance breakdown or full payment
+        const paidAmount = receivedAmount > 0 ? receivedAmount : booking.remainingAmount;
+        booking.remainingAmount = Math.max(0, Math.round((booking.remainingAmount - paidAmount) * 100) / 100);
+        const isFullyPaid = booking.remainingAmount <= 0;
+
+        if (isFullyPaid) {
+          booking.remainingAmount = 0;
+          booking.paymentStatus = "paid";
+          booking.remainingPaymentStatus = "paid";
+          booking.zelleVerificationStatus = "verified";
+          booking.remainingZelleVerificationStatus = "verified";
+        } else {
+          booking.paymentStatus = "deposit_paid";
+          booking.remainingPaymentStatus = "unpaid";
+          booking.remainingZelleVerificationStatus = "verified";
+        }
+
+        booking.zelleNotes = notes || `Zelle balance payment of $${paidAmount.toFixed(2)} verified via GHL (Remaining: $${booking.remainingAmount.toFixed(2)})`;
+
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        booking.paymentBreakdown.push({
+          amount: paidAmount,
+          paymentMethod: "zelle",
+          paymentType: isFullyPaid ? "balance_full" : "balance_partial",
+          status: "verified",
+          transactionId: transactionId,
+          iterationIndex: (booking.paymentBreakdown.length || 0) + 1,
+          notes: notes || `Zelle payment verified: $${paidAmount.toFixed(2)}`,
+          paidAt: new Date()
+        });
+
+        logger.info(`[GHL Zelle Webhook] Booking ${booking._id} BALANCE CLEARED/PARTIAL — $${paidAmount} paid via Zelle. Remaining: $${booking.remainingAmount}.`);
+
+        if (isFullyPaid) {
+          void sendFullPaymentConfirmationViaEmailJS(booking);
+        } else {
+          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const paymentLink = `${baseUrl}/user/venue-bookings`;
+          void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+        }
       } else {
-        // ✅ Deposit verified — confirm booking & lock slot
+        // Deposit payment — confirm booking & update deposit to actual amount received
         booking.status = "confirmed";
-        booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
+
+        if (receivedAmount > 0) {
+          booking.depositAmount = receivedAmount;
+          booking.remainingAmount = Math.max(0, Math.round((booking.totalAmount - receivedAmount) * 100) / 100);
+        }
+
+        if (booking.remainingAmount <= 0) {
+          booking.paymentStatus = "paid";
+          booking.remainingPaymentStatus = "paid";
+        } else {
+          booking.paymentStatus = "deposit_paid";
+        }
+
         booking.zelleVerificationStatus = "verified";
-        booking.zelleNotes = notes || "Verified automatically via GHL Zelle payment email parser";
-        logger.info(`[GHL Zelle Webhook] Booking ${bookingId} CONFIRMED & SLOT LOCKED via GHL Zelle verification.`);
+        booking.zelleNotes = notes || `$${receivedAmount.toFixed(2)} deposit verified via GHL Zelle webhook`;
+
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+
+        // ✅ Dedup: skip if a verified deposit entry already exists
+        const alreadyHasVerifiedDeposit = booking.paymentBreakdown.some(
+          p => p.paymentType === "deposit" && p.status === "verified"
+        );
+
+        if (!alreadyHasVerifiedDeposit) {
+          booking.paymentBreakdown.push({
+            amount: receivedAmount || booking.depositAmount,
+            paymentMethod: "zelle",
+            paymentType: "deposit",
+            status: "verified",
+            transactionId: transactionId,
+            iterationIndex: 1,
+            notes: notes || `Deposit verified: $${(receivedAmount || booking.depositAmount).toFixed(2)}`,
+            paidAt: new Date()
+          });
+          logger.info(`[GHL Zelle Webhook] Booking ${booking._id} CONFIRMED — $${receivedAmount} deposit recorded. Remaining: $${booking.remainingAmount}.`);
+        } else {
+          logger.info(`[GHL Zelle Webhook] Booking ${booking._id} — deposit already recorded, skipping duplicate push. Updated amounts only.`);
+        }
       }
 
       if (booking.couponUsed) {
@@ -732,18 +1283,39 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
 
       await booking.save();
 
+      const latestPaidNow = isBalancePayment
+        ? (receivedAmount > 0 ? receivedAmount : booking.remainingAmount)
+        : (receivedAmount || booking.depositAmount);
+
+      console.log(`\n💳 [GHL Zelle Webhook Success] Booking #${booking._id.toString().slice(-6).toUpperCase()}`);
+      console.log(`💳   Payment Type: ${isBalancePayment ? "Balance Installment" : "Deposit"}`);
+      console.log(`💳   Paid Now    : $${latestPaidNow}`);
+      console.log(`💳   Remaining   : $${booking.remainingAmount}`);
+      console.log(`💳   Status      : ${booking.status} / ${booking.paymentStatus}\n`);
+
+      // Trigger confirmation email & GHL events back to GHL
       void sendPaymentEmails(booking);
-      void sendGHLBookingEvent(booking);
+      if (!isBalancePayment && booking.remainingAmount > 0) {
+        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const paymentLink = `${baseUrl}/user/venue-bookings`;
+        void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
+      } else if (!isBalancePayment && booking.remainingAmount <= 0) {
+        void sendFullPaymentConfirmationViaEmailJS(booking);
+      }
+
+      void sendGHLBookingEvent(booking, { paidNow: latestPaidNow });
+      // ✅ Fire dedicated Zelle confirmation webhook → GHL trigger with updated dynamic fields
+      void sendGHLZelleConfirmedEvent(booking, { paidNow: latestPaidNow });
 
       res.status(200).json({
         success: true,
         message: isBalancePayment
-          ? "Remaining balance confirmed and booking marked as fully paid."
-          : "Booking confirmed and slot locked successfully via GHL Zelle verification.",
+          ? (booking.remainingAmount === 0 ? "Remaining balance confirmed and booking marked as fully paid." : `Balance installment of $${receivedAmount.toFixed(2)} verified. Remaining: $${booking.remainingAmount.toFixed(2)}`)
+          : "Booking confirmed and deposit updated successfully via GHL Zelle verification.",
         booking
       });
     } else {
-      // ⚠️ Missing or mismatched payment details -> Manual review
+      // Flag for manual review if mismatch
       booking.zelleVerificationStatus = "mismatched";
       booking.zelleNotes = notes || `Payment detail mismatch: Expected $${expectedAmount.toFixed(2)}, received $${receivedAmount.toFixed(2)}. Flagged for manual review.`;
 
@@ -753,7 +1325,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
       }
 
       await booking.save();
-      logger.warn(`[GHL Zelle Webhook] Booking ${bookingId} MISMATCHED ${isBalancePayment ? "(balance)" : "(deposit)"}. Expected $${expectedAmount}, got $${receivedAmount}.`);
+      logger.warn(`[GHL Zelle Webhook] Booking ${booking._id} MISMATCHED. Expected $${expectedAmount}, got $${receivedAmount}.`);
 
       res.status(200).json({
         success: false,

@@ -6,6 +6,27 @@ import DailyTableLock from "../models/DailyTableLock";
 import { buildDayRange } from "../utils/time.utils";
 import { sendPaymentEmails, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
 import { sendGHLBookingEvent } from "../utils/ghl.utils";
+import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
+import { sendQuoteViaGHL } from "../services/ghlQuote.service";
+
+/** Inline restaurant label map so backend does not depend on frontend lib */
+const CATERING_LABEL_MAP: Record<string, string> = {
+  none: "No Partner Catering (Self-Managed)",
+  no_catering: "No Partner Catering (Self-Managed)",
+  jamaican_jerk_house: "Jamaican Jerk House",
+  east_coast_street_tacos: "East Coast Street Tacos",
+  cooklyn_eats: "Cooklyn Eats",
+  cooklyneats: "Cooklyn Eats",
+  custom_catering: "Custom / Multi-Restaurant Mix",
+  custom: "Custom Menu",
+  seafood_buffet: "Jamaican Jerk House",
+  tropica_signature: "East Coast Street Tacos",
+  bbq_grill: "Cooklyn Eats",
+  cocktail_canapes: "East Coast Street Tacos",
+  vegan_garden: "Cooklyn Eats",
+  kids_friendly: "Jamaican Jerk House"
+};
+
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -73,13 +94,19 @@ export const getAllTables = async (req: Request, res: Response, next: NextFuncti
 
 export const getAllBookings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    await cleanupExpiredPendingBookings();
     const page = Number(req.query.page) > 0 ? Number(req.query.page) : 1;
     const limitRaw = req.query.limit;
     const limit = limitRaw !== undefined ? Number(limitRaw) : 10;
     const status = sanitizeString(req.query.status);
     const dateQuery = sanitizeString(req.query.date);
+    const bookingType = sanitizeString(req.query.bookingType || req.query.type);
 
     const baseFilter: any = {};
+
+    if (bookingType && bookingType !== "all") {
+      baseFilter.bookingType = bookingType;
+    }
 
     if (dateQuery) {
       const { dayStart, dayEnd } = buildDayRange(dateQuery);
@@ -347,6 +374,7 @@ export const getSlotLocks = async (req: Request, res: Response, next: NextFuncti
 /** Return payment summary + recent paid/unpaid bookings */
 export const getPaymentSummary = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    await cleanupExpiredPendingBookings();
     const [allBookings, paidBookings, unpaidBookings] = await Promise.all([
       Booking.find({ status: "confirmed" }).select("totalAmount paymentStatus"),
       Booking.find({ status: "confirmed", paymentStatus: "paid" }).select("totalAmount"),
@@ -411,12 +439,33 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
       return;
     }
 
+    const isFoodVerification =
+      proofType === "food" ||
+      (Boolean(booking.foodZelleProofUrl) && booking.foodPaymentStatus === "pending_verification" && proofType !== "deposit" && proofType !== "balance");
+
     const isBalanceVerification =
-      proofType === "balance" ||
-      (Boolean(booking.remainingZelleProofUrl) && booking.remainingPaymentStatus !== "paid");
+      !isFoodVerification &&
+      (proofType === "balance" ||
+      (Boolean(booking.remainingZelleProofUrl) && booking.remainingPaymentStatus !== "paid"));
 
     if (action === "verify") {
-      if (isBalanceVerification) {
+      if (isFoodVerification) {
+        booking.foodPaymentStatus = "paid";
+        booking.foodPaidAt = new Date();
+        booking.paymentBreakdown = booking.paymentBreakdown?.map(p =>
+          p.paymentType === "food_catering" ? { ...p, status: "verified" as const } : p
+        );
+        booking.quoteHistory = booking.quoteHistory || [];
+        booking.quoteHistory.push({
+          action: "quote_accepted",
+          actor: "admin",
+          actorName: "Tropica Admin",
+          price: booking.offerPrice,
+          notes: notes || "Food catering Zelle payment manually verified by Administrator",
+          createdAt: new Date()
+        });
+        await booking.save();
+      } else if (isBalanceVerification) {
         // Clear remaining balance!
         booking.remainingPaymentStatus = "paid";
         booking.paymentStatus = "paid";
@@ -446,7 +495,10 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
 
       res.status(200).json({ success: true, message: "Zelle payment manually verified and updated successfully", booking });
     } else {
-      if (isBalanceVerification) {
+      if (isFoodVerification) {
+        booking.foodPaymentStatus = "unpaid";
+        booking.zelleNotes = notes || "Food catering Zelle payment flagged as mismatched by Administrator";
+      } else if (isBalanceVerification) {
         booking.remainingZelleVerificationStatus = "mismatched";
         booking.zelleNotes = notes || "Remaining balance Zelle payment flagged as mismatched by Administrator";
       } else {
@@ -463,3 +515,132 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
     next(new Error("Failed to process manual Zelle verification"));
   }
 };
+
+/** Set offer price or negotiated quote on customer booking */
+export const updateBookingOfferPrice = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const bookingId = req.params.id;
+    const { offerPrice, negotiationNotes, applyAsTotal, dishQuantities } = req.body;
+
+    const booking = await Booking.findById(bookingId).populate("tables");
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    const rawPrice = Number(offerPrice);
+    if (isNaN(rawPrice) || rawPrice < 0) {
+      res.status(400).json({ success: false, message: "Invalid offer price" });
+      return;
+    }
+
+    const fee = 50;
+    let baseFoodPrice: number;
+    let finalCustomerPrice: number;
+
+    if (req.body.alreadyHasMarkup) {
+      finalCustomerPrice = rawPrice;
+      baseFoodPrice = req.body.basePrice !== undefined ? Number(req.body.basePrice) : Math.max(0, rawPrice - fee);
+    } else {
+      baseFoodPrice = rawPrice;
+      finalCustomerPrice = baseFoodPrice + fee;
+    }
+
+    booking.foodBasePrice = baseFoodPrice;
+    booking.foodServiceFee = fee;
+    booking.offerPrice = finalCustomerPrice;
+    booking.offerStatus = "offered";
+    booking.foodPaymentStatus = booking.foodPaymentStatus || "unpaid";
+
+    if (negotiationNotes !== undefined) {
+      booking.negotiationNotes = sanitizeString(negotiationNotes);
+    }
+
+    // Persist dish quantities if provided by admin
+    if (dishQuantities && typeof dishQuantities === "object") {
+      (booking as any).dishQuantities = dishQuantities;
+    }
+
+    booking.quoteHistory = booking.quoteHistory || [];
+    booking.quoteHistory.push({
+      action: "quote_sent",
+      actor: "admin",
+      actorName: "Tropica Admin",
+      price: finalCustomerPrice,
+      notes: negotiationNotes
+        ? `${sanitizeString(negotiationNotes)} (Food: $${baseFoodPrice.toFixed(2)} + $${fee.toFixed(2)} Tropica Fee)`
+        : `Includes $${fee.toFixed(2)} Tropica fee ($${baseFoodPrice.toFixed(2)} food base)`,
+      createdAt: new Date()
+    });
+
+    await booking.save();
+
+    // ─── Fire GHL Catering Quote Webhook ───────────────────────────
+    try {
+      // Parse dishes from booking notes (format: [Dishes: A, B, C])
+      let parsedDishes: string[] = [];
+      if (booking.notes) {
+        const dishesMatch = booking.notes.match(/\[Dishes:\s*([^\]]+)\]/i);
+        if (dishesMatch?.[1]) {
+          parsedDishes = dishesMatch[1].split(",").map((s: string) => s.trim()).filter(Boolean);
+        }
+      }
+
+      // Build dishes array with quantities
+      let savedQuantities: Record<string, number> = {};
+      const bookingQuantities = (booking as any).dishQuantities;
+      if (bookingQuantities) {
+        if (typeof bookingQuantities.entries === "function") {
+          savedQuantities = Object.fromEntries(bookingQuantities.entries());
+        } else if (typeof bookingQuantities === "object") {
+          savedQuantities = { ...bookingQuantities };
+        }
+      }
+      if (dishQuantities && typeof dishQuantities === "object") {
+        savedQuantities = { ...savedQuantities, ...dishQuantities };
+      }
+
+      const dishesWithQty = parsedDishes.length > 0
+        ? parsedDishes.map((rawName: string) => {
+            const qtyMatch =
+              rawName.match(/^(.*?)\s*\(?(?:x|\bqty:?)\s*(\d+)(?:\s*(?:platters?|plates?))?\)?$/i) ||
+              rawName.match(/^(.*?)\s*\((\d+)\s*(?:platters?|plates?|x)?\)$/i);
+            const cleanName = qtyMatch ? qtyMatch[1].trim() : rawName;
+            const parsedQty = qtyMatch ? parseInt(qtyMatch[2], 10) : 1;
+            const qty = savedQuantities[cleanName] ?? savedQuantities[rawName] ?? parsedQty;
+            return { name: cleanName, quantity: qty };
+          })
+        : Object.entries(savedQuantities).map(([name, qty]) => ({ name, quantity: Number(qty) || 1 }));
+
+      const restaurantName = CATERING_LABEL_MAP[booking.cateringMenu || "none"] || booking.cateringMenu || "Self-Managed";
+
+      await sendQuoteViaGHL({
+        bookingId: String(booking._id),
+        restaurantName,
+        dishes: dishesWithQty,
+        offerPrice: finalCustomerPrice,
+        foodBasePrice: baseFoodPrice,
+        tropicaFee: fee,
+        customerName: booking.customerName,
+        customerPhone: booking.customerPhone,
+        customerEmail: booking.customerEmail,
+        bookingDate: booking.bookingDate ? booking.bookingDate.toISOString().split("T")[0] : "",
+        negotiationNotes: negotiationNotes ? sanitizeString(negotiationNotes) : undefined,
+        timestamp: new Date().toISOString()
+      });
+    } catch (webhookErr: any) {
+      // Webhook failure must not roll back the save — just log it
+      console.error("[GHL QUOTE WEBHOOK] Non-fatal error:", webhookErr?.message);
+    }
+    // ──────────────────────────────────────────────────────────────
+
+    res.status(200).json({
+      success: true,
+      message: "Offer price / quote updated successfully",
+      booking
+    });
+  } catch (error) {
+    next(new Error("Failed to update booking offer price"));
+  }
+};
+

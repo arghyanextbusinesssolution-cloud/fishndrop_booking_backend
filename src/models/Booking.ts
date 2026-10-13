@@ -31,6 +31,8 @@ export interface IBooking extends Document {
   bookingType: "standard" | "private_event";
   durationHours?: number;
   needDj?: boolean;
+  needPhotographer?: boolean;
+  photographerHours?: number;
   cateringMenu?: string;
 
   // Referral Coupon Fields
@@ -48,15 +50,81 @@ export interface IBooking extends Document {
   remainingPaymentReminderSent: boolean;
   remainingPaymentSessionId?: string;
 
+  // Payment Breakdown / Installments Tracking
+  paymentBreakdown?: Array<{
+    amount: number;
+    paymentMethod: "card" | "zelle";
+    paymentType: "deposit" | "balance_partial" | "balance_full" | "food_catering";
+    status: "verified" | "pending";
+    transactionId?: string;
+    proofUrl?: string;
+    iterationIndex?: number;
+    notes?: string;
+    paidAt: Date;
+  }>;
+
   // Zelle Payment & GHL Verification Fields
   paymentMethod?: "card" | "zelle";
   zelleProofUrl?: string;
   remainingZelleProofUrl?: string;
   zelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
   remainingZelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
+  // Negotiation / Offer Price fields
+  offerPrice?: number;
+  negotiationNotes?: string;
+  offerStatus?: "pending" | "offered" | "accepted" | "declined";
+  foodBasePrice?: number;
+  foodServiceFee?: number;
+  foodPaymentStatus?: "unpaid" | "paid" | "pending_verification";
+  foodPaymentMethod?: "card" | "zelle";
+  foodZelleProofUrl?: string;
+  foodPaidAt?: Date;
+  dishQuantities?: Record<string, number>; // { "Dish Name": plattersCount }
+  quoteHistory?: Array<{
+    action: "inquiry_created" | "quote_sent" | "quote_accepted" | "quote_rejected" | "menu_updated";
+    actor: "admin" | "user";
+    actorName?: string;
+    price?: number;
+    notes?: string;
+    cateringMenu?: string;
+    dishes?: string[];
+    dishQuantities?: Record<string, number>;
+    createdAt: Date;
+  }>;
+
   zelleTransactionId?: string;
   zelleNotes?: string;
   zelleUploadedAt?: Date;
+
+  // Owner Financial Tracking & Profitability
+  contractedAmount?: number;
+  collectedAmount?: number;
+  outstandingBalance?: number;
+  paymentDueDate?: Date;
+  refundAmount?: number;
+  totalExpenses?: number;
+  netProfit?: number;
+  vendorCosts?: Array<{
+    vendorId?: string;
+    vendorName: string;
+    vendorType: "dj" | "photographer" | "videographer" | "catering" | "other";
+    amountOwed: number;
+    amountPaid: number;
+    paymentStatus: "unpaid" | "partially_paid" | "paid";
+    paymentDate?: Date;
+    paymentMethod?: string;
+    notes?: string;
+    markedPaidBy?: string;
+  }>;
+  refunds?: Array<{
+    amount: number;
+    reason: string;
+    status: "no_refund" | "refund_pending" | "partially_refunded" | "refunded";
+    processedBy?: string;
+    processedAt?: Date;
+    notes?: string;
+  }>;
+
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -105,10 +173,45 @@ const bookingSchema = new Schema<IBooking>(
       type: Boolean,
       default: false
     },
+    needPhotographer: {
+      type: Boolean,
+      default: false
+    },
+    photographerHours: {
+      type: Number,
+      default: 2
+    },
     cateringMenu: {
       type: String,
       trim: true
     },
+    dishQuantities: {
+      type: Map,
+      of: Number,
+      default: {}
+    },
+    offerPrice: { type: Number },
+    negotiationNotes: { type: String, trim: true, maxlength: 500 },
+    offerStatus: { type: String, enum: ["pending", "offered", "accepted", "declined"], default: "pending" },
+    foodBasePrice: { type: Number },
+    foodServiceFee: { type: Number, default: 50 },
+    foodPaymentStatus: { type: String, enum: ["unpaid", "paid", "pending_verification"], default: "unpaid" },
+    foodPaymentMethod: { type: String, enum: ["card", "zelle"] },
+    foodZelleProofUrl: { type: String },
+    foodPaidAt: { type: Date },
+    quoteHistory: [
+      {
+        action: { type: String, required: true },
+        actor: { type: String, required: true },
+        actorName: { type: String },
+        price: { type: Number },
+        notes: { type: String },
+        cateringMenu: { type: String },
+        dishes: [{ type: String }],
+        dishQuantities: { type: Map, of: Number },
+        createdAt: { type: Date, default: Date.now }
+      }
+    ],
     couponUsed: {
       type: Schema.Types.ObjectId,
       ref: "Coupon"
@@ -138,6 +241,19 @@ const bookingSchema = new Schema<IBooking>(
     remainingPaymentSessionId: {
       type: String
     },
+    paymentBreakdown: [
+      {
+        amount: { type: Number, required: true },
+        paymentMethod: { type: String, enum: ["card", "zelle"], default: "card" },
+        paymentType: { type: String, enum: ["deposit", "balance_partial", "balance_full"], default: "balance_full" },
+        status: { type: String, enum: ["verified", "pending"], default: "verified" },
+        transactionId: { type: String, default: "" },
+        proofUrl: { type: String, default: "" },
+        iterationIndex: { type: Number, default: 1 },
+        notes: { type: String, default: "" },
+        paidAt: { type: Date, default: Date.now }
+      }
+    ],
     paymentMethod: {
       type: String,
       enum: ["card", "zelle"],
@@ -171,7 +287,51 @@ const bookingSchema = new Schema<IBooking>(
     },
     zelleUploadedAt: {
       type: Date
-    }
+    },
+    // Owner Financial Tracking & Profitability
+    contractedAmount: { type: Number },
+    collectedAmount: { type: Number, default: 0 },
+    outstandingBalance: { type: Number },
+    paymentDueDate: { type: Date },
+    refundAmount: { type: Number, default: 0 },
+    totalExpenses: { type: Number, default: 0 },
+    netProfit: { type: Number, default: 0 },
+    vendorCosts: [
+      {
+        vendorId: { type: String },
+        vendorName: { type: String, required: true },
+        vendorType: {
+          type: String,
+          enum: ["dj", "photographer", "videographer", "catering", "other"],
+          required: true
+        },
+        amountOwed: { type: Number, required: true, default: 0 },
+        amountPaid: { type: Number, default: 0 },
+        paymentStatus: {
+          type: String,
+          enum: ["unpaid", "partially_paid", "paid"],
+          default: "unpaid"
+        },
+        paymentDate: { type: Date },
+        paymentMethod: { type: String },
+        notes: { type: String },
+        markedPaidBy: { type: String }
+      }
+    ],
+    refunds: [
+      {
+        amount: { type: Number, required: true },
+        reason: { type: String, required: true },
+        status: {
+          type: String,
+          enum: ["no_refund", "refund_pending", "partially_refunded", "refunded"],
+          default: "refunded"
+        },
+        processedBy: { type: String },
+        processedAt: { type: Date, default: Date.now },
+        notes: { type: String }
+      }
+    ]
   },
   { timestamps: true }
 );

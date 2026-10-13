@@ -17,6 +17,7 @@ const router = express.Router();
 router.post("/webhook", express.raw({ type: "application/json" }), handleStripeWebhook);
 
 // GHL Secure Zelle verification webhook (Public, validated by secret key/header)
+router.post("/ghl-zelle-webhook", express.json(), handleGHLZelleWebhook);
 router.post("/zelle-webhook", express.json(), handleGHLZelleWebhook);
 router.post("/zelle/webhook", express.json(), handleGHLZelleWebhook);
 

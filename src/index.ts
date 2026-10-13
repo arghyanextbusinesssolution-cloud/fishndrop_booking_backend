@@ -13,12 +13,15 @@ import adminRoutes from "./routes/admin.routes";
 import authRoutes from "./routes/auth.routes";
 import bookingRoutes from "./routes/booking.routes";
 import paymentRoutes from "./routes/payment.routes";
+import webhookRoutes from "./routes/webhook.routes";
+import financialsRoutes from "./routes/financials.routes";
 import Booking from "./models/Booking";
 import SlotLock from "./models/SlotLock";
 import { sendRemainingBalanceReminderViaEmailJS, sendRemainingBalanceCancellationViaEmailJS } from "./utils/email.utils";
 import { startReminderCron } from "./cron/reminderCron";
 
 const app = express();
+app.set("trust proxy", 1);
 const isProduction = process.env.NODE_ENV === "production";
 
 if (!process.env.STRIPE_SECRET_KEY?.trim() && !process.env.STRIPE_SECRET?.trim() && !process.env.STRIPE_API_KEY?.trim()) {
@@ -109,7 +112,10 @@ app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/bookings", bookingRoutes);
+app.use("/api/admin/financials", financialsRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/webhooks", webhookRoutes);
 
 app.use((req, res) => {
   logger.warn(`[404] ${req.method} ${req.url}`);

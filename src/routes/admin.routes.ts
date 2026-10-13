@@ -11,8 +11,10 @@ import {
   getPaymentSummary,
   deleteTable,
   deleteBooking,
-  verifyAdminZelleBooking
+  verifyAdminZelleBooking,
+  updateBookingOfferPrice
 } from "../controllers/admin.controller";
+import { updateBookingMenu } from "../controllers/booking";
 import adminOnly from "../middleware/admin.middleware";
 import authMiddleware from "../middleware/auth.middleware";
 import couponRoutes from "./coupon.routes";
@@ -29,6 +31,8 @@ router.patch("/slots/lock", setSlotLock);
 router.get("/slot-locks", getSlotLocks);
 router.get("/bookings", getAllBookings);
 router.patch("/bookings/:id/verify-zelle", verifyAdminZelleBooking);
+router.patch("/bookings/:id/offer", updateBookingOfferPrice);
+router.patch("/bookings/:id/menu", updateBookingMenu);
 router.delete("/bookings/:id", deleteBooking);
 router.get("/stats", getTableStats);
 router.get("/payments/summary", getPaymentSummary);

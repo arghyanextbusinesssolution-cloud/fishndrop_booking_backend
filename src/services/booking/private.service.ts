@@ -2,8 +2,10 @@ import Booking from "../../models/Booking";
 import SlotLock from "../../models/SlotLock";
 import Table from "../../models/Table";
 import { isOverlapping, buildDayRange, timeToMinutes, TIME_SLOTS } from "../../utils/time.utils";
+import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
 
 export const getPrivateEventAvailability = async (date: string, duration: number) => {
+  await cleanupExpiredPendingBookings();
   const { dayStart, dayEnd } = buildDayRange(date);
 
   const [allTables, slotLocks, bookingsForDay] = await Promise.all([

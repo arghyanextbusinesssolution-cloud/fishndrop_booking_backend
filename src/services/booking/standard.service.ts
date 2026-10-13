@@ -4,6 +4,7 @@ import SlotLock from "../../models/SlotLock";
 import Table from "../../models/Table";
 import assignTables from "../../utils/tableAssigner";
 import { isOverlapping, buildDayRange, TIME_SLOTS } from "../../utils/time.utils";
+import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
 
 export interface BookingPayload {
   userId: mongoose.Types.ObjectId;
@@ -109,6 +110,7 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
 };
 
 export const getStandardAvailability = async (date: string, partySize: number, allowSplit: boolean) => {
+  await cleanupExpiredPendingBookings();
   const { dayStart, dayEnd } = buildDayRange(date);
 
   // Adjust range by -6 hours to catch bookings saved in local midnight (e.g. India +5:30)

@@ -6,9 +6,19 @@ import {
     sendRemainingBalanceReminderViaEmailJS,
     sendRemainingBalanceCancellationViaEmailJS
 } from "../utils/email.utils";
+import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
 
 export const startReminderCron = () => {
-    logger.info("Initializing 72-hour email reminder cron job...");
+    logger.info("Initializing 72-hour email reminder & 15-min unpaid booking cleanup cron jobs...");
+
+    // Auto-cleanup unpaid pending draft bookings every 2 minutes
+    cron.schedule("*/2 * * * *", async () => {
+        try {
+            await cleanupExpiredPendingBookings();
+        } catch (err) {
+            logger.error("[Auto-Cleanup Cron Error]", err);
+        }
+    });
 
     // Runs every hour
     cron.schedule("0 * * * *", async () => {

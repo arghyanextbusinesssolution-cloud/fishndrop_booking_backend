@@ -1,8 +1,9 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
-import { sendVerificationCode, checkVerificationCode, formatToE164 } from "../services/twilioVerify.service";
-import { checkSmsQuota, recordSmsDispatch, getSmsQuotaStatus } from "../services/smsLimit.service";
+import OtpCode from "../models/OtpCode";
+import { sendOtpViaGHL, formatToE164 } from "../services/ghlOtp.service";
+import { checkSmsQuota, recordSmsDispatch, getSmsQuotaStatus, clearPhoneSmsAttempts } from "../services/smsLimit.service";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -19,24 +20,83 @@ export const getSmsQuota = async (req: Request, res: Response): Promise<void> =>
 export const sendOTP = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const inputPhone = sanitizeString(req.body.phone);
+    const name = sanitizeString(req.body.name);
+    const email = sanitizeString(req.body.email).toLowerCase();
+
     if (!inputPhone || inputPhone.replace(/\D/g, "").length < 7) {
       res.status(400).json({ success: false, message: "Valid phone number is required" });
       return;
     }
     const rawPhone = formatToE164(inputPhone);
 
-    // Auto-create or ensure user record exists
+    // Check SMS Quota & rate limits
+    const quotaCheck = await checkSmsQuota(rawPhone);
+    if (!quotaCheck.allowed) {
+      res.status(429).json({
+        success: false,
+        message: quotaCheck.error || "SMS limit reached. Please try again later."
+      });
+      return;
+    }
+
+    // 1. Generate a secure 4-digit OTP code (1000 - 9999)
+    const otpCode = Math.floor(1000 + Math.random() * 9000).toString();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // Strictly 10 minutes expiry
+    const messageTimestamp = new Date();
+
+    console.log(`\n🔑 [4-DIGIT OTP GENERATED] Phone: ${rawPhone} | Code: ${otpCode} | Expires: 10m (${otpExpires.toISOString()})`);
+
+    // 2. Persist / update OTP in OtpCode model (replaces existing OTP if already exists, resets 10-minute expiry)
+    await OtpCode.findOneAndUpdate(
+      { phone: rawPhone },
+      {
+        $set: {
+          code: otpCode,
+          expiresAt: otpExpires,
+          timestamp: messageTimestamp
+        }
+      },
+      { upsert: true, returnDocument: "after" }
+    );
+
+    // Also update/upsert user record
     await User.findOneAndUpdate(
       { phone: rawPhone },
-      { $setOnInsert: { isPhoneVerified: true } },
-      { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
-    );
+      {
+        $set: {
+          otpCode,
+          otpExpires: otpExpires
+        },
+        $setOnInsert: { isPhoneVerified: false }
+      },
+      { upsert: true, returnDocument: "after" }
+    ).catch((err) => {
+      console.warn("User record sync note:", err.message);
+    });
+
+    // 3. Dispatch strictly phone number, 4-digit OTP, and message timestamp to GoHighLevel
+    const ghlResult = await sendOtpViaGHL({
+      phone: rawPhone,
+      otp: otpCode
+    });
+
+    if (!ghlResult.success && process.env.NODE_ENV === "production") {
+      res.status(502).json({
+        success: false,
+        message: "Failed to dispatch verification code via SMS gateway. Please try again."
+      });
+      return;
+    }
+
+    // 4. Record SMS dispatch for rate limiting
+    await recordSmsDispatch(rawPhone, ghlResult.success ? "sent" : "dev_dispatched");
 
     res.status(200).json({
       success: true,
-      message: "Phone verified automatically without OTP requirement",
+      message: `4-digit verification code sent via SMS to ${rawPhone}`,
       phone: rawPhone,
-      status: "auto_approved"
+      status: "sent",
+      ...(process.env.NODE_ENV === "development" ? { devCode: otpCode } : {})
     });
   } catch (error: any) {
     console.error("❌ [Send OTP Error]:", error);
@@ -47,6 +107,7 @@ export const sendOTP = async (req: Request, res: Response, next: NextFunction): 
 export const verifyOTP = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const inputPhone = sanitizeString(req.body.phone);
+    const otp = sanitizeString(req.body.otp || req.body.code);
     const name = sanitizeString(req.body.name);
     const email = sanitizeString(req.body.email).toLowerCase();
 
@@ -54,10 +115,56 @@ export const verifyOTP = async (req: Request, res: Response, next: NextFunction)
       res.status(400).json({ success: false, message: "Phone number is required" });
       return;
     }
+    if (!otp) {
+      res.status(400).json({ success: false, message: "4-digit verification code is required" });
+      return;
+    }
+    const cleanCode = otp.trim();
     const rawPhone = formatToE164(inputPhone);
 
+    console.log(`\n=================== [VERIFY 4-DIGIT OTP START] ===================`);
+    console.log(`[TARGET PHONE] : ${rawPhone}`);
+    console.log(`[ENTERED CODE] : ${cleanCode}`);
+
+    // Check test code in development mode or master dev fallback
+    const isDevTestCode = cleanCode === "1234" && process.env.NODE_ENV === "development";
+
+    // 1. Check against OtpCode collection
+    const activeOtpRecord = await OtpCode.findOne({
+      phone: rawPhone,
+      code: cleanCode,
+      expiresAt: { $gt: new Date() }
+    });
+
+    // 2. Check against User model
+    const existingUser = await User.findOne({ phone: rawPhone }).select("+otpCode +otpExpires");
+    const isUserOtpValid =
+      existingUser &&
+      existingUser.otpCode === cleanCode &&
+      existingUser.otpExpires &&
+      new Date(existingUser.otpExpires) > new Date();
+
+    const isApproved = Boolean(activeOtpRecord || isUserOtpValid || isDevTestCode);
+
+    if (!isApproved) {
+      console.log(`❌ [VERIFY OTP] Invalid or expired code: ${cleanCode}`);
+      console.log(`=================== [VERIFY OTP END] ===================\n`);
+      res.status(400).json({
+        success: false,
+        message: "Invalid or expired 4-digit verification code"
+      });
+      return;
+    }
+
+    console.log(`✅ [VERIFY OTP] Code verified successfully!`);
+    console.log(`=================== [VERIFY OTP END] ===================\n`);
+
+    // Clean up OTP record from database
+    await OtpCode.deleteMany({ phone: rawPhone }).catch(() => {});
+    await clearPhoneSmsAttempts(rawPhone);
+
     // Find and update user in database
-    let user = await User.findOne({ phone: rawPhone });
+    let user = existingUser || (await User.findOne({ phone: rawPhone }));
     if (!user) {
       const cleanPhone = rawPhone.replace(/\D/g, "");
       user = await User.findOne({ phone: cleanPhone });

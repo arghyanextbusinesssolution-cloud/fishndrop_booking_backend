@@ -237,12 +237,23 @@ export const sendRemainingBalanceReminderViaEmailJS = async (booking: IBooking, 
     const endHour = Number(booking.bookingTime.split(":")[0]) + durationHours;
     const checkOutStr = `${bookingDateStr} at ${endHour}:00`;
 
+    // Dynamic verified breakdown calculation
+    const breakdown: any[] = Array.isArray(booking.paymentBreakdown) ? booking.paymentBreakdown : [];
+    const verifiedBreakdown = breakdown.filter((p: any) => p.status === "verified");
+    const totalPaid = verifiedBreakdown.length > 0
+      ? verifiedBreakdown.reduce((sum: number, p: any) => sum + (Number(p.amount) || 0), 0)
+      : (booking.depositAmount || 0);
+
+    const latestPayment = verifiedBreakdown[verifiedBreakdown.length - 1];
+    const paidNow = latestPayment ? Number(latestPayment.amount || 0) : Number(booking.depositAmount || 0);
+
     console.log(`\n📧 [EmailJS] ▶ Triggering balance-due reminder...`);
-    console.log(`📧 [EmailJS]   Booking ID : ${booking._id}`);
-    console.log(`📧 [EmailJS]   To         : ${booking.customerEmail} (${booking.customerName})`);
-    console.log(`📧 [EmailJS]   Remaining  : $${booking.remainingAmount} of $${booking.totalAmount}`);
-    console.log(`📧 [EmailJS]   Pay Link   : ${paymentLink}`);
-    console.log(`📧 [EmailJS]   Template   : ${EMAILJS_TEMPLATE_ID} | Service: ${EMAILJS_SERVICE_ID}`);
+    console.log(`📧 [EmailJS]   Booking ID       : ${booking._id}`);
+    console.log(`📧 [EmailJS]   To               : ${booking.customerEmail} (${booking.customerName})`);
+    console.log(`📧 [EmailJS]   Total Paid So Far: $${totalPaid} (Latest Paid: $${paidNow})`);
+    console.log(`📧 [EmailJS]   Remaining        : $${booking.remainingAmount} of $${booking.totalAmount}`);
+    console.log(`📧 [EmailJS]   Pay Link         : ${paymentLink}`);
+    console.log(`📧 [EmailJS]   Template         : ${EMAILJS_TEMPLATE_ID} | Service: ${EMAILJS_SERVICE_ID}`);
 
     await sendViaEmailJS({
       email: booking.customerEmail,         // maps to {{email}} — recipient address
@@ -253,7 +264,10 @@ export const sendRemainingBalanceReminderViaEmailJS = async (booking: IBooking, 
       checkOut: checkOutStr,
       roomType: "Private Venue Buyout",
       totalAmount: booking.totalAmount,
-      paidAmount: booking.depositAmount,
+      paidAmount: totalPaid,
+      totalPaid: totalPaid,
+      paidNow: paidNow,
+      depositAmount: booking.depositAmount,
       remainingAmount: booking.remainingAmount,
       paymentLink,
       supportEmail: "support@tropica.nyc",
