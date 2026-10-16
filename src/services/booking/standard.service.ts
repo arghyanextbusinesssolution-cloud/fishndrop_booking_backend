@@ -74,6 +74,9 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
 
   const isZelle = payload.paymentMethod === "zelle";
 
+  const DEPOSIT_AMOUNT = 200; // $200 deposit to secure booking
+  const remainingAmt = Math.max(0, finalAmount - DEPOSIT_AMOUNT);
+
   const booking = await Booking.create({
     user: payload.userId,
     tables: assignment.tables.map((table) => table._id),
@@ -91,9 +94,9 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     bookingDate: parsedDate,
     bookingTime: payload.bookingTime,
     status: "pending",
-    depositAmount: finalAmount,
-    remainingAmount: 0,
-    remainingPaymentStatus: "paid",
+    depositAmount: DEPOSIT_AMOUNT,
+    remainingAmount: remainingAmt,
+    remainingPaymentStatus: remainingAmt > 0 ? "pending" : "paid",
     couponUsed: payload.couponUsed,
     couponCode: payload.couponCode,
     promoterName: payload.promoterName,

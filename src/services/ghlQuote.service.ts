@@ -1,5 +1,5 @@
 const DEFAULT_GHL_QUOTE_WEBHOOK =
-  "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/d09a4610-f888-489f-9a94-25c4d4becf1a";
+  "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/a30a35d2-77be-4bf4-94c3-37a3fda40174";
 
 export interface GHLQuotePayload {
   bookingId: string;

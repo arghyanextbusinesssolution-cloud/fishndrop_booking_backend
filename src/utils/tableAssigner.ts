@@ -9,7 +9,7 @@ interface AssignResult {
   code?: string;
 }
 
-const PRICE_PER_PERSON = 40;
+const BASE_PRICE = 500; // $500 flat for up to 5 hours
 const NO_TABLE_ERROR = "Sir for this time and date no table is available";
 
 const assignTables = async (
@@ -102,7 +102,7 @@ const assignTables = async (
 
   return {
     tables: selected,
-    totalAmount: partySize * PRICE_PER_PERSON,
+    totalAmount: BASE_PRICE, // Flat $500 base rate
     complimentaryDrinks: selected.length * 2
   };
 };
