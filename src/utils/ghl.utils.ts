@@ -2,11 +2,16 @@ import logger from "../config/logger";
 
 // ── Webhook 1: General events (lead, booking confirmed, canceled, zelle pending)
 const getWebhookUrl = (): string => {
-  return "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/68dcac67-ddc2-4765-87d7-9034ebe33001";
+  return (
+    process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
+    "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723"
+  );
 };
 
 // ── Webhook 2: Fired specifically when Zelle deposit is verified → booking confirmed
-const ZELLE_CONFIRMED_WEBHOOK_URL = "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/e5e5e572-b248-4505-8dd0-feb90d2c904d";
+const ZELLE_CONFIRMED_WEBHOOK_URL =
+  process.env.GHL_ZELLE_CONFIRMED_WEBHOOK_URL ||
+  "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723";
 
 export interface GHLPayloadOptions {
   event: "lead_created" | "booking_confirmed" | "booking_canceled" | "zelle_payment_submitted" | "zelle_payment_confirmed";
@@ -66,6 +71,10 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     ? verifiedBreakdown.map((p: any, idx: number) => `${getOrdinal(idx + 1)}: $${Number(p.amount || 0).toFixed(2)} (${p.paymentType === "deposit" ? "Deposit" : "Balance"})`).join(" | ")
     : `Deposit: $${depositInStart.toFixed(2)}`;
 
+  const tableStr = Array.isArray(booking.tables)
+    ? booking.tables.map((t: any) => (typeof t === "object" ? t.tableNumber || t.name || t._id : String(t))).join(", ")
+    : (booking.tables ? String(booking.tables) : "");
+
   return {
     event: options.event,
     leadStatus: options.leadStatus,
@@ -81,7 +90,10 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     bookingDate: dateStr,
     bookingTime: booking.bookingTime || "",
     bookingType: booking.bookingType || "standard",
-    durationHours: booking.durationHours || 2,
+    durationHours: booking.durationHours || 5,
+    venueName: "Tropica / Fish & Drop",
+    tables: tableStr,
+    tableNumbers: tableStr,
     totalAmount: Number(booking.totalAmount || 0),
     total_amount: Number(booking.totalAmount || 0),
 
@@ -122,9 +134,35 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     remainingZelleVerificationStatus: booking.remainingZelleVerificationStatus || "none",
     zelleTransactionId: booking.zelleTransactionId || "",
     zelleNotes: booking.zelleNotes || "",
+    zelleUploadedAt: booking.zelleUploadedAt ? new Date(booking.zelleUploadedAt).toISOString() : "",
+
+    // Occasion and preferences
     occasion: booking.occasion || "",
     notes: booking.notes || "",
     couponCode: booking.couponCode || "",
+    discountApplied: Number(booking.discountApplied || 0),
+    originalAmount: Number(booking.originalAmount || booking.totalAmount || 0),
+    finalAmount: Number(booking.finalAmount || booking.totalAmount || 0),
+    promoterName: booking.promoterName || "",
+
+    // Private event and venue add-ons
+    needDj: Boolean(booking.needDj),
+    needPhotographer: Boolean(booking.needPhotographer),
+    photographerHours: Number(booking.photographerHours || 0),
+    cateringMenu: booking.cateringMenu || "none",
+    complimentaryDrinks: Number(booking.complimentaryDrinks || 0),
+    customCakeDetails: booking.customCakeDetails || null,
+    cakeDetails: booking.cakeDetails || "",
+    cakePrice: Number(booking.cakePrice || 0),
+
+    // Catering / Restaurant quote details
+    offerPrice: Number(booking.offerPrice || 0),
+    foodBasePrice: Number(booking.foodBasePrice || 0),
+    foodPaymentStatus: booking.foodPaymentStatus || "unpaid",
+    foodPaymentMethod: booking.foodPaymentMethod || "",
+    foodZelleProofUrl: booking.foodZelleProofUrl || "",
+    dishQuantities: booking.dishQuantities || {},
+
     timestamp: new Date().toISOString()
   };
 };
