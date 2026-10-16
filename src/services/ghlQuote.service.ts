@@ -1,4 +1,4 @@
-const DEFAULT_GHL_QUOTE_WEBHOOK =
+const GHL_QUOTE_WEBHOOK_URL =
   "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/a30a35d2-77be-4bf4-94c3-37a3fda40174";
 
 export interface GHLQuotePayload {
@@ -24,7 +24,7 @@ export interface GHLQuotePayload {
 export const sendQuoteViaGHL = async (
   payload: GHLQuotePayload
 ): Promise<{ success: boolean; status?: number; error?: string }> => {
-  const webhookUrl = process.env.GHL_QUOTE_WEBHOOK_URL || DEFAULT_GHL_QUOTE_WEBHOOK;
+  const webhookUrl = GHL_QUOTE_WEBHOOK_URL;
 
   console.log(`\n=================== [GHL QUOTE WEBHOOK DISPATCH] ===================`);
   console.log(`[BOOKING ID]      : ${payload.bookingId}`);

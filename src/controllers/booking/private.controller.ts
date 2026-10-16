@@ -118,9 +118,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
     const djCost = needDj ? 300 : 0;
-    const extraHoursCost = durationHours > 5 ? (durationHours - 5) * 300 : 0;
+    const extraHoursCost = durationHours > 5 ? (durationHours - 5) * 125 : 0;
     const photographerCost = needPhotographer ? 300 + Math.max(0, photographerHours - 2) * 150 : 0;
-    const totalAmount = 1500 + extraHoursCost + djCost + photographerCost;
+    const totalAmount = 500 + extraHoursCost + djCost + photographerCost;
     let currentAmount = totalAmount;
     let couponUsed, couponCode, promoterName, discountApplied = 0;
 
@@ -135,9 +135,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       }
     }
 
-    // Deposit = $300 to secure date and time for Tropica October Booking Special
-    let minDeposit = Math.min(currentAmount, 300);
-    let depositAmount = Math.min(currentAmount, 300);
+    // Deposit = $200 to secure date and time
+    let minDeposit = Math.min(currentAmount, 200);
+    let depositAmount = Math.min(currentAmount, 200);
     if (req.body.customDepositAmount) {
       const custom = Number(req.body.customDepositAmount);
       if (!isNaN(custom) && custom >= minDeposit && custom <= currentAmount) {

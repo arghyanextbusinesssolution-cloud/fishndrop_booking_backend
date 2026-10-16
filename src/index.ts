@@ -127,7 +127,7 @@ app.use(errorMiddleware);
 
 const port = Number(process.env.PORT || 5000);
 app.listen(port, () => {
-  logger.info(`Server started on port ${port} - RESTART_VERIFIED_UUID_1`);
+  logger.info(`Server started on port ${port} - RESTART_VERIFIED_QUOTE_WEBHOOK`);
   logger.info("Custom Cake feature loaded successfully");
 });
 
