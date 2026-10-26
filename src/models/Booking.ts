@@ -53,8 +53,8 @@ export interface IBooking extends Document {
   // Payment Breakdown / Installments Tracking
   paymentBreakdown?: Array<{
     amount: number;
-    paymentMethod: "card" | "zelle";
-    paymentType: "deposit" | "balance_partial" | "balance_full" | "food_catering";
+    paymentMethod: "card" | "zelle" | "cash" | "bank_transfer" | "other";
+    paymentType: "deposit" | "balance_partial" | "balance_full" | "food_catering" | "manual";
     status: "verified" | "pending";
     transactionId?: string;
     proofUrl?: string;
@@ -64,7 +64,7 @@ export interface IBooking extends Document {
   }>;
 
   // Zelle Payment & GHL Verification Fields
-  paymentMethod?: "card" | "zelle";
+  paymentMethod?: "card" | "zelle" | "cash" | "bank_transfer" | "other";
   zelleProofUrl?: string;
   remainingZelleProofUrl?: string;
   zelleVerificationStatus?: "none" | "pending_ghl_verification" | "verified" | "mismatched" | "manual_review";
@@ -124,6 +124,9 @@ export interface IBooking extends Document {
     processedAt?: Date;
     notes?: string;
   }>;
+
+  isManualBooking?: boolean;
+  manualCreatedBy?: string;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -244,8 +247,8 @@ const bookingSchema = new Schema<IBooking>(
     paymentBreakdown: [
       {
         amount: { type: Number, required: true },
-        paymentMethod: { type: String, enum: ["card", "zelle"], default: "card" },
-        paymentType: { type: String, enum: ["deposit", "balance_partial", "balance_full"], default: "balance_full" },
+        paymentMethod: { type: String, enum: ["card", "zelle", "cash", "bank_transfer", "other"], default: "card" },
+        paymentType: { type: String, enum: ["deposit", "balance_partial", "balance_full", "food_catering", "manual"], default: "balance_full" },
         status: { type: String, enum: ["verified", "pending"], default: "verified" },
         transactionId: { type: String, default: "" },
         proofUrl: { type: String, default: "" },
@@ -256,8 +259,15 @@ const bookingSchema = new Schema<IBooking>(
     ],
     paymentMethod: {
       type: String,
-      enum: ["card", "zelle"],
+      enum: ["card", "zelle", "cash", "bank_transfer", "other"],
       default: "card"
+    },
+    isManualBooking: {
+      type: Boolean,
+      default: false
+    },
+    manualCreatedBy: {
+      type: String
     },
     zelleProofUrl: {
       type: String,

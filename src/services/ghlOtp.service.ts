@@ -10,15 +10,21 @@ export interface GHLOtpRequest {
  * Converts a phone number to standard international E.164 format (+1XXXXXXXXXX)
  */
 export const formatToE164 = (phone: string): string => {
-  let clean = phone.replace(/[^\d+]/g, "");
+  const clean = phone.replace(/[^\d+]/g, "");
+  const digits = clean.replace(/\D/g, "");
+
+  // If standard 10 digits (US/Canada), format as +1XXXXXXXXXX
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  // If 11 digits starting with 1, format as +1XXXXXXXXXX
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
 
   if (!clean.startsWith("+")) {
-    // If standard 10 digits (US/Canada), prepend +1
-    if (clean.length === 10) {
-      clean = `+1${clean}`;
-    } else {
-      clean = `+${clean}`;
-    }
+    return `+${clean}`;
   }
 
   return clean;

@@ -12,7 +12,13 @@ import {
   deleteTable,
   deleteBooking,
   verifyAdminZelleBooking,
-  updateBookingOfferPrice
+  updateBookingOfferPrice,
+  createManualBooking,
+  lookupCustomer,
+  markBookingFullyPaid,
+  getAllUsers,
+  deleteUser,
+  deleteBulkUsers
 } from "../controllers/admin.controller";
 import { updateBookingMenu } from "../controllers/booking";
 import adminOnly from "../middleware/admin.middleware";
@@ -30,7 +36,16 @@ router.delete("/tables/:id", deleteTable);
 router.patch("/slots/lock", setSlotLock);
 router.get("/slot-locks", getSlotLocks);
 router.get("/bookings", getAllBookings);
+router.post("/bookings/manual", createManualBooking);
+router.get("/customers/lookup", lookupCustomer);
+
+// User management routes
+router.get("/users", getAllUsers);
+router.delete("/users/:id", deleteUser);
+router.post("/users/bulk-delete", deleteBulkUsers);
+
 router.patch("/bookings/:id/verify-zelle", verifyAdminZelleBooking);
+router.patch("/bookings/:id/mark-paid", markBookingFullyPaid);
 router.patch("/bookings/:id/offer", updateBookingOfferPrice);
 router.patch("/bookings/:id/menu", updateBookingMenu);
 router.delete("/bookings/:id", deleteBooking);

@@ -83,16 +83,20 @@ export const calculateBookingFinancials = (b: IBooking) => {
         notes: `${b.photographerHours || 2}h Photography Coverage`
       });
     }
-    if (b.cateringMenu || b.foodBasePrice) {
-      const foodCost = Math.round((b.foodBasePrice || 350) * 0.65);
-      vendorCostsList.push({
-        vendorName: b.cateringMenu || "Catering Partner",
-        vendorType: "catering",
-        amountOwed: foodCost,
-        amountPaid: b.foodPaymentStatus === "paid" ? foodCost : 0,
-        paymentStatus: b.foodPaymentStatus === "paid" ? "paid" : "unpaid",
-        notes: "Event Catering & Platters"
-      });
+    const hasPartnerCatering = b.cateringMenu && b.cateringMenu !== "none" && b.cateringMenu !== "no_catering";
+    if (hasPartnerCatering && (b.foodBasePrice || b.offerPrice)) {
+      const baseFood = b.foodBasePrice || (b.offerPrice ? Math.max(0, b.offerPrice - (b.foodServiceFee || 50)) : 0);
+      if (baseFood > 0) {
+        const foodCost = Math.round(baseFood * 0.65);
+        vendorCostsList.push({
+          vendorName: b.cateringMenu || "Catering Partner",
+          vendorType: "catering",
+          amountOwed: foodCost,
+          amountPaid: b.foodPaymentStatus === "paid" ? foodCost : 0,
+          paymentStatus: b.foodPaymentStatus === "paid" ? "paid" : "unpaid",
+          notes: "Event Catering & Platters"
+        });
+      }
     }
   }
 

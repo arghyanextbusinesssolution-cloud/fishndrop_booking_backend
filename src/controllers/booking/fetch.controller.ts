@@ -3,6 +3,7 @@ import Booking from "../../models/Booking";
 import Table from "../../models/Table";
 import { sanitizeString } from "../../utils/time.utils";
 import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
+import { formatToE164 } from "../../services/ghlOtp.service";
 
 export const getUserBookings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -13,7 +14,24 @@ export const getUserBookings = async (req: Request, res: Response, next: NextFun
     const type = req.query.type as string;
     const skip = (page - 1) * limit;
 
-    const query: any = { user: req.user?._id };
+    const userPhone = req.user?.phone;
+    const cleanUserDigits = userPhone ? userPhone.replace(/\D/g, "") : "";
+    const last10 = cleanUserDigits.slice(-10);
+
+    const userFilters: any[] = [{ user: req.user?._id }];
+    if (userPhone) {
+      userFilters.push({ customerPhone: userPhone });
+      userFilters.push({ customerPhone: formatToE164(userPhone) });
+      userFilters.push({ customerPhone: cleanUserDigits });
+      if (last10.length >= 7) {
+        userFilters.push({ customerPhone: { $regex: last10 + "$" } });
+      }
+    }
+    if (req.user?.email && !req.user.email.includes("@fishndrop.com")) {
+      userFilters.push({ customerEmail: req.user.email.toLowerCase() });
+    }
+
+    const query: any = { $or: userFilters };
     if (status && status !== "all") query.status = status;
     if (type && type !== "all") query.bookingType = type;
 
@@ -21,6 +39,17 @@ export const getUserBookings = async (req: Request, res: Response, next: NextFun
       Booking.find(query).populate("tables").sort({ createdAt: -1 }).skip(skip).limit(limit),
       Booking.countDocuments(query)
     ]);
+
+    // Ensure any bookings matched by phone are linked to this user's account
+    if (req.user?._id) {
+      const unlinkedBookings = bookings.filter(b => b.user?.toString() !== req.user?._id.toString());
+      if (unlinkedBookings.length > 0) {
+        await Booking.updateMany(
+          { _id: { $in: unlinkedBookings.map(b => b._id) } },
+          { $set: { user: req.user._id } }
+        ).catch(() => {});
+      }
+    }
 
     res.status(200).json({
       success: true,
@@ -45,7 +74,16 @@ export const getBookingById = async (req: Request, res: Response, next: NextFunc
       return;
     }
 
-    if (booking.user.toString() !== req.user?._id.toString() && req.user?.role !== "admin") {
+    const userCleanPhone = req.user?.phone?.replace(/\D/g, "");
+    const bookingCleanPhone = booking.customerPhone?.replace(/\D/g, "");
+
+    const isOwner =
+      booking.user?.toString() === req.user?._id.toString() ||
+      (userCleanPhone && bookingCleanPhone && userCleanPhone === bookingCleanPhone) ||
+      req.user?.role === "admin" ||
+      req.user?.role === "owner";
+
+    if (!isOwner) {
       res.status(403).json({ success: false, message: "Forbidden" });
       return;
     }

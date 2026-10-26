@@ -163,17 +163,23 @@ export const verifyOTP = async (req: Request, res: Response, next: NextFunction)
     await OtpCode.deleteMany({ phone: rawPhone }).catch(() => {});
     await clearPhoneSmsAttempts(rawPhone);
 
+    const cleanPhone = rawPhone.replace(/\D/g, "");
+    const last10 = cleanPhone.slice(-10);
+
     // Find and update user in database
-    let user = existingUser || (await User.findOne({ phone: rawPhone }));
-    if (!user) {
-      const cleanPhone = rawPhone.replace(/\D/g, "");
-      user = await User.findOne({ phone: cleanPhone });
-    }
+    let user = existingUser || (await User.findOne({
+      $or: [
+        { phone: rawPhone },
+        { phone: cleanPhone },
+        ...(last10.length >= 7 ? [{ phone: { $regex: last10 + "$" } }] : []),
+        ...(email ? [{ email }] : [])
+      ]
+    }));
 
     if (!user) {
       user = await User.create({
         phone: rawPhone,
-        name: name || "Guest User",
+        name: (name && name !== "Guest User") ? name : "Guest User",
         email: email || undefined,
         isPhoneVerified: true
       });
@@ -181,9 +187,45 @@ export const verifyOTP = async (req: Request, res: Response, next: NextFunction)
       user.isPhoneVerified = true;
       user.otpCode = undefined;
       user.otpExpires = undefined;
-      if (name) user.name = name;
-      if (email && email.length > 0) user.email = email;
+      if (rawPhone && user.phone !== rawPhone) user.phone = rawPhone;
+      // Never overwrite a real name with "Guest User"
+      if (name && name !== "Guest User") {
+        user.name = name;
+      }
+      if (email && email.length > 0 && !user.email) user.email = email;
       await user.save();
+    }
+
+    // Auto-resolve real name from existing booking if name is still "Guest User" or empty
+    if (!user.name || user.name === "Guest User") {
+      const Booking = (await import("../models/Booking")).default;
+      const bWithRealName = await Booking.findOne({
+        $or: [
+          { user: user._id },
+          ...(last10.length >= 7 ? [{ customerPhone: { $regex: last10 + "$" } }] : [])
+        ],
+        customerName: { $nin: ["Guest User", "Walk-in Guest", "", null] }
+      }).sort({ createdAt: -1 });
+
+      if (bWithRealName && bWithRealName.customerName) {
+        user.name = bWithRealName.customerName;
+        await user.save();
+      }
+    }
+
+    // Auto-link any orphan bookings with matching phone to this verified user
+    if (last10.length >= 7) {
+      const Booking = (await import("../models/Booking")).default;
+      await Booking.updateMany(
+        {
+          $or: [
+            { customerPhone: { $regex: last10 + "$" } },
+            ...(user.email && !user.email.includes("@fishndrop.com") ? [{ customerEmail: user.email }] : [])
+          ],
+          user: { $ne: user._id }
+        },
+        { $set: { user: user._id } }
+      ).catch(() => {});
     }
 
     const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
