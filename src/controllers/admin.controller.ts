@@ -526,6 +526,11 @@ export const updateBookingOfferPrice = async (req: Request, res: Response, next:
     const bookingId = req.params.id;
     const { offerPrice, negotiationNotes, applyAsTotal, dishQuantities } = req.body;
 
+    console.log(`\n========================================================`);
+    console.log(`🛎️ [ADMIN QUOTE UPDATE] Clicked for Booking ID: ${bookingId}`);
+    console.log(`🛎️ [ADMIN QUOTE UPDATE] Request Body:`, JSON.stringify(req.body, null, 2));
+    console.log(`========================================================\n`);
+
     const booking = await Booking.findById(bookingId).populate("tables");
     if (!booking) {
       res.status(404).json({ success: false, message: "Booking not found" });

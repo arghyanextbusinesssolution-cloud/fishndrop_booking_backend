@@ -1,6 +1,6 @@
 const GHL_QUOTE_WEBHOOK_URL =
   process.env.GHL_QUOTE_WEBHOOK_URL ||
-  "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/07979069-3d42-48a0-9a07-2b385668ddfd";
+  "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/a30a35d2-77be-4bf4-94c3-37a3fda40174";
 
 export interface GHLQuotePayload {
   event?: string;
