@@ -157,9 +157,10 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
     const chargeAmount = computeChargeAmount(booking.depositAmount);
 
     const isPrivate = booking.bookingType === "private_event";
+    const bookingDateStr = booking.bookingDate.toLocaleDateString("en-US", { timeZone: "UTC" });
     const depositLabel = isPrivate
-      ? `Security Deposit – Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}`
-      : `Table Reservation for ${booking.partySize} guests on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime}${tableNumbers ? ` (Tables: ${tableNumbers})` : ""}`;
+      ? `Security Deposit – Private Venue on ${bookingDateStr} at ${booking.bookingTime}`
+      : `Table Reservation for ${booking.partySize} guests on ${bookingDateStr} at ${booking.bookingTime}${tableNumbers ? ` (Tables: ${tableNumbers})` : ""}`;
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -262,7 +263,7 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
               currency: "usd",
               product_data: {
                 name: "Tropica Catering – Food & Dining Package",
-                description: `Payment for Private Buyout Food Catering on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime} – Full Package $${foodCharge.toFixed(2)}`
+                description: `Payment for Private Buyout Food Catering on ${booking.bookingDate.toLocaleDateString("en-US", { timeZone: "UTC" })} at ${booking.bookingTime} – Full Package $${foodCharge.toFixed(2)}`
               },
               unit_amount: chargeAmount
             }
@@ -318,7 +319,7 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
             currency: "usd",
             product_data: {
               name: `Tropica Venue – Remaining Balance ${isPartial ? `(Installment #${iterationNum})` : ""}`,
-              description: `Payment for Private Venue on ${booking.bookingDate.toLocaleDateString()} at ${booking.bookingTime} – ${isPartial ? `Installment of $${amountToCharge.toFixed(2)}` : "Full Balance Settlement"}`
+              description: `Payment for Private Venue on ${booking.bookingDate.toLocaleDateString("en-US", { timeZone: "UTC" })} at ${booking.bookingTime} – ${isPartial ? `Installment of $${amountToCharge.toFixed(2)}` : "Full Balance Settlement"}`
             },
             unit_amount: chargeAmount
           }

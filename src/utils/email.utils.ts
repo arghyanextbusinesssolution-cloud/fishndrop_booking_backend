@@ -65,7 +65,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
                       <tr>
                         <td width="50%" style="padding-bottom: 20px;">
                           <p style="margin: 0; font-size: 12px; text-transform: uppercase; color: #888888; letter-spacing: 2px; font-weight: 600;">Date</p>
-                          <p style="margin: 4px 0 0 0; font-size: 16px; color: #ffffff; font-weight: 600;">${new Date(booking.bookingDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}</p>
+                          <p style="margin: 4px 0 0 0; font-size: 16px; color: #ffffff; font-weight: 600;">${new Date(booking.bookingDate).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'long', month: 'long', day: 'numeric' })}</p>
                         </td>
                         <td width="50%" style="padding-bottom: 20px;">
                           <p style="margin: 0; font-size: 12px; text-transform: uppercase; color: #888888; letter-spacing: 2px; font-weight: 600;">Time</p>
@@ -127,7 +127,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
       to: booking.customerEmail,
       subject: `A Culinary Experience Awaits - Tropica`,
       html: customerHtml,
-      text: `Confirmed: Your reservation for ${booking.partySize} guests on ${new Date(booking.bookingDate).toLocaleDateString()} is ready!`,
+      text: `Confirmed: Your reservation for ${booking.partySize} guests on ${new Date(booking.bookingDate).toLocaleDateString('en-US', { timeZone: 'UTC' })} is ready!`,
     };
 
     await transporter.sendMail(customerMailOptions);
@@ -156,7 +156,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
           <tr>
             <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #6b7280; font-size: 14px;">Reservation</td>
             <td style="padding: 12px 0; border-bottom: 1px solid #f3f4f6; color: #111827; font-size: 14px; text-align: right; font-weight: 600;">
-              ${new Date(booking.bookingDate).toLocaleDateString()}<br>
+              ${new Date(booking.bookingDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}<br>
               <span style="font-weight: 400; color: #6b7280; font-size: 12px;">${booking.bookingTime}</span>
             </td>
           </tr>
@@ -179,7 +179,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
       to: ADMIN_EMAIL,
       subject: `Alert: New Booking - ${booking.customerName}`,
       html: adminHtml,
-      text: `New payment received: ${booking.customerName} has booked for ${booking.partySize} people on ${new Date(booking.bookingDate).toLocaleDateString()}. Amount: $${booking.totalAmount}`,
+      text: `New payment received: ${booking.customerName} has booked for ${booking.partySize} people on ${new Date(booking.bookingDate).toLocaleDateString('en-US', { timeZone: 'UTC' })}. Amount: $${booking.totalAmount}`,
     };
 
     await transporter.sendMail(adminMailOptions);
@@ -230,7 +230,7 @@ async function sendViaEmailJS(templateParams: Record<string, string | number>, t
 export const sendRemainingBalanceReminderViaEmailJS = async (booking: IBooking, paymentLink: string): Promise<void> => {
   try {
     const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric"
+      timeZone: "UTC", weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
     const durationHours = booking.durationHours || 1;
     const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;
@@ -289,7 +289,7 @@ export const sendRemainingBalanceReminderViaEmailJS = async (booking: IBooking, 
 export const sendRemainingBalanceCancellationViaEmailJS = async (booking: IBooking): Promise<void> => {
   try {
     const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric"
+      timeZone: "UTC", weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
     const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;
 
@@ -318,7 +318,7 @@ export const sendRemainingBalanceCancellationViaEmailJS = async (booking: IBooki
 export const sendFullPaymentConfirmationViaEmailJS = async (booking: IBooking): Promise<void> => {
   try {
     const bookingDateStr = new Date(booking.bookingDate).toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric", month: "long", day: "numeric"
+      timeZone: "UTC", weekday: "long", year: "numeric", month: "long", day: "numeric"
     });
     const durationHours = booking.durationHours || 1;
     const checkInStr = `${bookingDateStr} at ${booking.bookingTime}`;

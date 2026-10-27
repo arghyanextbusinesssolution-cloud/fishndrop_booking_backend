@@ -202,15 +202,15 @@ export const getFinancialStats = async (req: Request, res: Response, next: NextF
         let label = "";
         if (groupBy === "day") {
           bucketKey = eventDate.toISOString().slice(0, 10);
-          label = eventDate.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+          label = eventDate.toLocaleDateString("en-US", { timeZone: "UTC", month: "short", day: "numeric" });
         } else if (groupBy === "week") {
-          const weekNum = Math.ceil(eventDate.getDate() / 7);
-          bucketKey = `${eventDate.getFullYear()}-M${eventDate.getMonth() + 1}-W${weekNum}`;
-          label = `${eventDate.toLocaleDateString("en-US", { month: "short" })} W${weekNum}`;
+          const weekNum = Math.ceil(eventDate.getUTCDate() / 7);
+          bucketKey = `${eventDate.getUTCFullYear()}-M${eventDate.getUTCMonth() + 1}-W${weekNum}`;
+          label = `${eventDate.toLocaleDateString("en-US", { timeZone: "UTC", month: "short" })} W${weekNum}`;
         } else {
           // month
-          bucketKey = `${eventDate.getFullYear()}-${String(eventDate.getMonth() + 1).padStart(2, "0")}`;
-          label = eventDate.toLocaleDateString("en-US", { month: "short", year: "2-digit" });
+          bucketKey = `${eventDate.getUTCFullYear()}-${String(eventDate.getUTCMonth() + 1).padStart(2, "0")}`;
+          label = eventDate.toLocaleDateString("en-US", { timeZone: "UTC", month: "short", year: "2-digit" });
         }
 
         if (!chartBuckets[bucketKey]) {
