@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 import User from "../models/User";
 import OtpCode from "../models/OtpCode";
 import { sendOtpViaGHL, formatToE164 } from "../services/ghlOtp.service";
@@ -19,6 +20,14 @@ export const getSmsQuota = async (req: Request, res: Response): Promise<void> =>
 
 export const sendOTP = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    if (mongoose.connection.readyState !== 1) {
+      res.status(503).json({
+        success: false,
+        message: "Database connection is temporarily unavailable. Please retry in a few moments."
+      });
+      return;
+    }
+
     const inputPhone = sanitizeString(req.body.phone);
     const name = sanitizeString(req.body.name);
     const email = sanitizeString(req.body.email).toLowerCase();

@@ -5,6 +5,7 @@ import express from "express";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import morgan from "morgan";
+import mongoose from "mongoose";
 import connectDB from "./config/db";
 import logger from "./config/logger";
 import errorMiddleware from "./middleware/error.middleware";
@@ -98,9 +99,10 @@ app.use(globalRateLimiter);
 app.use(timeoutMiddleware);
 
 app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    message: "Backend is running from SOURCE (ts-node)",
+  const isDbConnected = mongoose.connection.readyState === 1;
+  res.status(isDbConnected ? 200 : 503).json({
+    status: isDbConnected ? "ok" : "degraded",
+    database: isDbConnected ? "connected" : "disconnected",
     timestamp: new Date().toISOString(),
     env: process.env.NODE_ENV || "development"
   });

@@ -8,9 +8,9 @@ const timeoutMiddleware = (req: Request, res: Response, next: NextFunction): voi
     }
   }, timeoutMs);
 
-  res.on("finish", () => {
-    clearTimeout(timer);
-  });
+  const clear = () => clearTimeout(timer);
+  res.on("finish", clear);
+  res.on("close", clear);
 
   next();
 };

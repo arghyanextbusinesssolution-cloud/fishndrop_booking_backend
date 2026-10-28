@@ -8,6 +8,10 @@ interface MongoDuplicateError extends Error {
 }
 
 const errorMiddleware = (err: Error, req: Request, res: Response, next: NextFunction): void => {
+  if (res.headersSent) {
+    return next(err);
+  }
+
   logger.error("Unhandled error", { message: err.message, stack: err.stack, path: req.originalUrl, method: req.method });
 
   if (err instanceof mongoose.Error.CastError) {
