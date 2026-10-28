@@ -57,7 +57,16 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       cakePrice: Number(req.body.cakePrice || 0),
       allowSplit: req.body.allowSplit === true,
       paymentMethod: req.body.paymentMethod === "zelle" ? "zelle" : "card",
-      zelleProofUrl: sanitizeString(req.body.zelleProofUrl)
+      zelleProofUrl: sanitizeString(req.body.zelleProofUrl),
+      utmSource: sanitizeString(req.body.utmSource || req.body.utm_source),
+      utmMedium: sanitizeString(req.body.utmMedium || req.body.utm_medium),
+      utmCampaign: sanitizeString(req.body.utmCampaign || req.body.utm_campaign),
+      utmContent: sanitizeString(req.body.utmContent || req.body.utm_content),
+      utmTerm: sanitizeString(req.body.utmTerm || req.body.utm_term),
+      fbclid: sanitizeString(req.body.fbclid),
+      fbc: sanitizeString(req.body.fbc),
+      fbp: sanitizeString(req.body.fbp),
+      referralUrl: sanitizeString(req.body.referralUrl || req.body.landingPage)
     };
 
     if (req.body.couponCode) {
@@ -160,7 +169,16 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       cakePrice: Number(req.body.cakePrice || 0),
       allowSplit: req.body.allowSplit === true,
       paymentMethod: req.body.paymentMethod === "zelle" ? "zelle" : "card",
-      zelleProofUrl: sanitizeString(req.body.zelleProofUrl)
+      zelleProofUrl: sanitizeString(req.body.zelleProofUrl),
+      utmSource: sanitizeString(req.body.utmSource || req.body.utm_source),
+      utmMedium: sanitizeString(req.body.utmMedium || req.body.utm_medium),
+      utmCampaign: sanitizeString(req.body.utmCampaign || req.body.utm_campaign),
+      utmContent: sanitizeString(req.body.utmContent || req.body.utm_content),
+      utmTerm: sanitizeString(req.body.utmTerm || req.body.utm_term),
+      fbclid: sanitizeString(req.body.fbclid),
+      fbc: sanitizeString(req.body.fbc),
+      fbp: sanitizeString(req.body.fbp),
+      referralUrl: sanitizeString(req.body.referralUrl || req.body.landingPage)
     };
 
     const result = await BookingService.reserveTablesAndCreateBooking(payload);

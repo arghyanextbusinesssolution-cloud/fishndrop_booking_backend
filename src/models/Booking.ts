@@ -128,6 +128,37 @@ export interface IBooking extends Document {
   isManualBooking?: boolean;
   manualCreatedBy?: string;
 
+  // Event Timing & Reschedule Tracking
+  eventEndTime?: string;
+  cancellationReason?: string;
+  rescheduledAt?: Date;
+  rescheduleCount?: number;
+  previousBookingDate?: Date;
+  previousBookingTime?: string;
+
+  // Guest Media Upload & Marketing Consent
+  marketingConsent?: boolean;
+  marketingConsentAt?: Date;
+  guestMedia?: Array<{
+    url: string;
+    publicId?: string;
+    mediaType: "photo" | "video";
+    originalName?: string;
+    sizeBytes?: number;
+    uploadedAt: Date;
+  }>;
+
+  // Instagram / Meta Ads & Attribution Tracking
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
+  utmTerm?: string;
+  fbclid?: string;
+  fbc?: string;
+  fbp?: string;
+  referralUrl?: string;
+
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -341,7 +372,40 @@ const bookingSchema = new Schema<IBooking>(
         processedAt: { type: Date, default: Date.now },
         notes: { type: String }
       }
-    ]
+    ],
+
+    // Event Timing & Reschedule Tracking
+    eventEndTime: { type: String },
+    cancellationReason: { type: String },
+    rescheduledAt: { type: Date },
+    rescheduleCount: { type: Number, default: 0 },
+    previousBookingDate: { type: Date },
+    previousBookingTime: { type: String },
+
+    // Guest Media Upload & Marketing Consent
+    marketingConsent: { type: Boolean, default: false },
+    marketingConsentAt: { type: Date },
+    guestMedia: [
+      {
+        url: { type: String, required: true },
+        publicId: { type: String },
+        mediaType: { type: String, enum: ["photo", "video"], default: "photo" },
+        originalName: { type: String },
+        sizeBytes: { type: Number },
+        uploadedAt: { type: Date, default: Date.now }
+      }
+    ],
+
+    // Instagram / Meta Ads & Attribution Tracking
+    utmSource: { type: String },
+    utmMedium: { type: String },
+    utmCampaign: { type: String },
+    utmContent: { type: String },
+    utmTerm: { type: String },
+    fbclid: { type: String },
+    fbc: { type: String },
+    fbp: { type: String },
+    referralUrl: { type: String }
   },
   { timestamps: true }
 );

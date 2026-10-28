@@ -261,6 +261,7 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
 
     const name = sanitizeString(req.body.name);
     const email = sanitizeString(req.body.email).toLowerCase();
+    const phone = sanitizeString(req.body.phone);
 
     const user = await User.findById(req.user._id);
     if (!user) {
@@ -270,6 +271,7 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
 
     if (name) user.name = name;
     if (email) user.email = email;
+    if (phone) user.phone = phone;
 
     await user.save();
 
@@ -281,7 +283,9 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
         name: user.name || "",
         email: user.email || "",
         phone: user.phone,
-        role: user.role
+        role: user.role,
+        isPhoneVerified: user.isPhoneVerified,
+        createdAt: (user as any).createdAt
       }
     });
   } catch (error: any) {

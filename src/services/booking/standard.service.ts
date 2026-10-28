@@ -5,6 +5,7 @@ import Table from "../../models/Table";
 import assignTables from "../../utils/tableAssigner";
 import { isOverlapping, buildDayRange, TIME_SLOTS } from "../../utils/time.utils";
 import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
+import { calculateEventTimes } from "../../utils/ghl.utils";
 
 export interface BookingPayload {
   userId: mongoose.Types.ObjectId;
@@ -27,6 +28,15 @@ export interface BookingPayload {
   discountValue?: number;
   paymentMethod?: "card" | "zelle";
   zelleProofUrl?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmContent?: string;
+  utmTerm?: string;
+  fbclid?: string;
+  fbc?: string;
+  fbp?: string;
+  referralUrl?: string;
 }
 
 export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => {
@@ -93,6 +103,8 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     complimentaryDrinks: assignment.complimentaryDrinks,
     bookingDate: parsedDate,
     bookingTime: payload.bookingTime,
+    eventEndTime: calculateEventTimes(payload.bookingDate, payload.bookingTime, 2).eventEndTime,
+    durationHours: 2,
     status: "pending",
     depositAmount: DEPOSIT_AMOUNT,
     remainingAmount: remainingAmt,
@@ -106,7 +118,16 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     paymentMethod: isZelle ? "zelle" : "card",
     zelleProofUrl: payload.zelleProofUrl || "",
     zelleVerificationStatus: isZelle ? "pending_ghl_verification" : "none",
-    zelleUploadedAt: isZelle && payload.zelleProofUrl ? new Date() : undefined
+    zelleUploadedAt: isZelle && payload.zelleProofUrl ? new Date() : undefined,
+    utmSource: payload.utmSource,
+    utmMedium: payload.utmMedium,
+    utmCampaign: payload.utmCampaign,
+    utmContent: payload.utmContent,
+    utmTerm: payload.utmTerm,
+    fbclid: payload.fbclid,
+    fbc: payload.fbc,
+    fbp: payload.fbp,
+    referralUrl: payload.referralUrl
   });
 
   return { booking };

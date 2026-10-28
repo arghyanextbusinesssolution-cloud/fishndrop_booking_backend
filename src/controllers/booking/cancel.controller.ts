@@ -25,13 +25,16 @@ export const cancelBooking = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
-    await Booking.findByIdAndUpdate(booking._id, { $set: { status: "cancelled" } });
+    const reason = sanitizeString(req.body.reason || "User/Admin requested cancellation");
+    booking.status = "cancelled";
+    booking.cancellationReason = reason;
+    await booking.save();
     
     if (booking.bookingType === "private_event") {
       await SlotLock.deleteMany({ eventId: booking._id });
     }
 
-    void sendGHLCancelEvent(booking, "User/Admin requested cancellation");
+    void sendGHLCancelEvent(booking, reason);
 
     res.status(200).json({ success: true, message: "Booking cancelled successfully" });
   } catch (error) {

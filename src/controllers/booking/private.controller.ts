@@ -7,7 +7,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
-import { sendGHLLeadEvent, sendGHLZellePendingEvent } from "../../utils/ghl.utils";
+import { sendGHLLeadEvent, sendGHLZellePendingEvent, calculateEventTimes } from "../../utils/ghl.utils";
 
 const LEAD_CONNECTOR_WEBHOOK_URL =
   process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
@@ -150,6 +150,20 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const isZelle = req.body.paymentMethod === "zelle";
     const zelleProofUrl = sanitizeString(req.body.zelleProofUrl);
 
+    // Calculate event end time for GHL triggers and thank-you workflow coordination
+    const { eventEndTime } = calculateEventTimes(bookingDate, bookingTime, durationHours);
+
+    // Capture Instagram / Meta ad attribution parameters
+    const utmSource = sanitizeString(req.body.utmSource || req.body.utm_source);
+    const utmMedium = sanitizeString(req.body.utmMedium || req.body.utm_medium);
+    const utmCampaign = sanitizeString(req.body.utmCampaign || req.body.utm_campaign);
+    const utmContent = sanitizeString(req.body.utmContent || req.body.utm_content);
+    const utmTerm = sanitizeString(req.body.utmTerm || req.body.utm_term);
+    const fbclid = sanitizeString(req.body.fbclid);
+    const fbc = sanitizeString(req.body.fbc);
+    const fbp = sanitizeString(req.body.fbp);
+    const referralUrl = sanitizeString(req.body.referralUrl || req.body.landingPage);
+
     const booking = await Booking.create({
       user: user!._id,
       tables: allTables.map(t => t._id),
@@ -167,6 +181,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       complimentaryDrinks: partySize * 2,
       bookingDate: parsedDate,
       bookingTime,
+      eventEndTime,
       bookingType: "private_event",
       durationHours,
       status: "pending",
@@ -184,6 +199,15 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       zelleProofUrl: zelleProofUrl || "",
       zelleVerificationStatus: isZelle ? "pending_ghl_verification" : "none",
       zelleUploadedAt: isZelle && zelleProofUrl ? new Date() : undefined,
+      utmSource,
+      utmMedium,
+      utmCampaign,
+      utmContent,
+      utmTerm,
+      fbclid,
+      fbc,
+      fbp,
+      referralUrl,
       quoteHistory: [
         {
           action: "inquiry_created",

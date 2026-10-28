@@ -13,7 +13,10 @@ import {
   getVenueCapacity,
   getPublicBookingStatus,
   updateBookingMenu,
-  respondToQuote
+  respondToQuote,
+  rescheduleBooking,
+  getBookingUploadInfo,
+  uploadGuestEventMedia
 } from "../controllers/booking";
 import authMiddleware from "../middleware/auth.middleware";
 import validate from "../middleware/validate.middleware";
@@ -34,6 +37,10 @@ router.post("/validate-coupon", validateCoupon);
 // Public route for uploading cake photos in the booking wizard
 router.post("/upload-cake-photo", uploadCakePhoto);
 
+// Public routes for guest photo/video upload with marketing consent
+router.get("/upload-info/:idOrCode", getBookingUploadInfo);
+router.post("/upload-media", uploadGuestEventMedia);
+
 // Booking catering menu & preferences update - accessible for editing booking menu without blocking
 router.patch("/:id/menu", updateBookingMenu);
 router.patch("/menu/:id", updateBookingMenu);
@@ -46,6 +53,7 @@ router.use(authMiddleware);
 router.post("/", createBookingValidator, validate, createBooking);
 router.get("/my", getUserBookings);
 router.patch("/cancel/:id", cancelBooking);
+router.patch("/:id/reschedule", rescheduleBooking);
 router.get("/:id", getBookingById);
 
 export default router;

@@ -6,6 +6,8 @@ export interface UserPayload {
   email?: string;
   name?: string;
   phone?: string;
+  isPhoneVerified?: boolean;
+  createdAt?: Date | string;
   _id: Types.ObjectId;
 }
 
