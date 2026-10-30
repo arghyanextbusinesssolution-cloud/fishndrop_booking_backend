@@ -46,6 +46,9 @@ export const sendOtpViaGHL = async (
     number: formattedPhone,
     phone: formattedPhone,
     otp: data.otp,
+    code: data.otp,
+    otp_code: data.otp,
+    message: `Your Tropica Sanctuary verification code is: ${data.otp}`,
     timestamp: messageTimestamp
   };
 

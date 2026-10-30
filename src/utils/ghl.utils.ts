@@ -13,6 +13,24 @@ const ZELLE_CONFIRMED_WEBHOOK_URL =
   process.env.GHL_ZELLE_CONFIRMED_WEBHOOK_URL ||
   "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723";
 
+// ── Partner Catering Restaurant Label Map ─────────────────
+export const CATERING_LABEL_MAP: Record<string, string> = {
+  none: "No Partner Catering (Self-Managed)",
+  no_catering: "No Partner Catering (Self-Managed)",
+  jamaican_jerk_house: "Jamaican Jerk House",
+  east_coast_street_tacos: "East Coast Street Tacos",
+  cooklyn_eats: "Cooklyn Eats",
+  cooklyneats: "Cooklyn Eats",
+  custom_catering: "Custom / Multi-Restaurant Mix",
+  custom: "Custom Menu",
+  seafood_buffet: "Jamaican Jerk House",
+  tropica_signature: "East Coast Street Tacos",
+  bbq_grill: "Cooklyn Eats",
+  cocktail_canapes: "East Coast Street Tacos",
+  vegan_garden: "Cooklyn Eats",
+  kids_friendly: "Jamaican Jerk House"
+};
+
 export type NormalizedStatus =
   | "lead"
   | "pending_payment"
@@ -327,6 +345,67 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     previousEventEndIso = prevTimes.eventEndIso;
   }
 
+  // ── Restaurant Name Resolution ────────────────────────────
+  const cateringKey = (booking.cateringMenu || "none").toLowerCase().trim();
+  const restaurantName =
+    CATERING_LABEL_MAP[cateringKey] ||
+    (booking.cateringMenu && booking.cateringMenu !== "none" ? booking.cateringMenu : "No Partner Catering (Self-Managed)");
+
+  // ── Parse Dishes from Notes and Dish Quantities ───────────
+  const rawNotes = booking.notes || "";
+  let cleanNotes = rawNotes;
+  let parsedDishes: Array<{ name: string; quantity: number }> = [];
+
+  const dishesMatch = rawNotes.match(/\[Dishes:\s*([^\]]+)\]/i);
+  if (dishesMatch?.[1]) {
+    const rawDishItems = dishesMatch[1].split(",").map((s: string) => s.trim()).filter(Boolean);
+    parsedDishes = rawDishItems.map((raw: string) => {
+      const qtyMatch =
+        raw.match(/^(.*?)\s*\(?(?:x|\bqty:?)\s*(\d+)(?:\s*(?:platters?|plates?))?\)?$/i) ||
+        raw.match(/^(.*?)\s*\((\d+)\s*(?:platters?|plates?|x)?\)$/i);
+      const cleanName = qtyMatch ? qtyMatch[1].trim() : raw;
+      const parsedQty = qtyMatch ? parseInt(qtyMatch[2], 10) : 1;
+      return { name: cleanName, quantity: parsedQty };
+    });
+    cleanNotes = cleanNotes.replace(/\[Dishes:\s*[^\]]+\]/gi, "").trim();
+  }
+
+  // Merge or fallback to booking.dishQuantities if present
+  let savedQuantities: Record<string, number> = {};
+  const bookingQuantities = booking.dishQuantities;
+  if (bookingQuantities) {
+    if (typeof bookingQuantities.entries === "function") {
+      savedQuantities = Object.fromEntries(bookingQuantities.entries());
+    } else if (typeof bookingQuantities === "object") {
+      savedQuantities = { ...bookingQuantities };
+    }
+  }
+
+  if (parsedDishes.length === 0 && Object.keys(savedQuantities).length > 0) {
+    parsedDishes = Object.entries(savedQuantities).map(([name, qty]) => ({
+      name,
+      quantity: Number(qty) || 1
+    }));
+  } else if (parsedDishes.length > 0 && Object.keys(savedQuantities).length > 0) {
+    parsedDishes = parsedDishes.map(d => ({
+      name: d.name,
+      quantity: savedQuantities[d.name] ?? d.quantity
+    }));
+  }
+
+  // Extract dietary notes if bracketed
+  let dietaryNotes = "";
+  const dietaryMatch = cleanNotes.match(/\[Dietary:\s*([^\]]+)\]/i);
+  if (dietaryMatch?.[1]) {
+    dietaryNotes = dietaryMatch[1].trim();
+    cleanNotes = cleanNotes.replace(/\[Dietary:\s*[^\]]+\]/gi, "").trim();
+  }
+
+  const dishesSummary = parsedDishes.length > 0
+    ? parsedDishes.map(d => `${d.name} (x${d.quantity})`).join(", ")
+    : "";
+  const totalDishCount = parsedDishes.reduce((sum, d) => sum + (Number(d.quantity) || 1), 0);
+
   // Contact custom fields dictionary (for direct GHL contact custom field mapping)
   const contactCustomFields: Record<string, any> = {
     bookingId,
@@ -358,6 +437,20 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     review_url: reviewUrl,
     marketingConsent: marketingConsent ? "Granted" : "Denied",
     marketing_consent: marketingConsent ? "Granted" : "Denied",
+    restaurantName,
+    restaurant_name: restaurantName,
+    cateringMenu: booking.cateringMenu || "none",
+    catering_menu: booking.cateringMenu || "none",
+    dishesSummary,
+    dishes_summary: dishesSummary,
+    dishesList: dishesSummary,
+    dishes_list: dishesSummary,
+    dishCount: totalDishCount,
+    dish_count: totalDishCount,
+    dietaryNotes,
+    dietary_notes: dietaryNotes,
+    customerNotes: cleanNotes,
+    customer_notes: cleanNotes,
     utmSource: booking.utmSource || "",
     utm_source: booking.utmSource || "",
     utmCampaign: booking.utmCampaign || "",
@@ -533,7 +626,9 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
 
     // ── Occasion and Preferences ──────────────────────────────
     occasion: booking.occasion || "",
-    notes: booking.notes || "",
+    notes: cleanNotes,
+    customerNotes: cleanNotes,
+    rawNotes,
     couponCode: booking.couponCode || "",
     discountApplied: Number(booking.discountApplied || 0),
     originalAmount: Number(booking.originalAmount || booking.totalAmount || 0),
@@ -544,11 +639,24 @@ const buildPayload = (booking: any, options: GHLPayloadOptions) => {
     needDj: Boolean(booking.needDj),
     needPhotographer: Boolean(booking.needPhotographer),
     photographerHours: Number(booking.photographerHours || 0),
-    cateringMenu: booking.cateringMenu || "none",
     complimentaryDrinks: Number(booking.complimentaryDrinks || 0),
     customCakeDetails: booking.customCakeDetails || null,
     cakeDetails: booking.cakeDetails || "",
     cakePrice: Number(booking.cakePrice || 0),
+
+    // ── Catering, Restaurant & Dishes ─────────────────────────
+    restaurantName,
+    restaurant_name: restaurantName,
+    cateringMenu: booking.cateringMenu || "none",
+    dishes: parsedDishes,
+    dishesList: dishesSummary,
+    dishes_list: dishesSummary,
+    dishesSummary,
+    dishes_summary: dishesSummary,
+    dishCount: totalDishCount,
+    dish_count: totalDishCount,
+    dietaryNotes,
+    dietary_notes: dietaryNotes,
 
     // Catering / Restaurant quote details
     offerPrice: Number(booking.offerPrice || 0),
