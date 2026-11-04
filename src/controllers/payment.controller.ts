@@ -1418,3 +1418,101 @@ export const createTourCheckoutSession = async (req: Request, res: Response, nex
     next(new Error(`Tour checkout error: ${error.message}`));
   }
 };
+
+
+export const createTourPaymentIntent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({
+        success: false,
+        code: "STRIPE_NOT_CONFIGURED",
+        message: "Payments are not configured. Please contact us to set up your Stripe integration."
+      });
+      return;
+    }
+
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim();
+    const phone = String(req.body.phone || "").trim();
+    const userId = req.body.userId ? String(req.body.userId) : "guest";
+
+    if (!name) {
+      res.status(400).json({ success: false, message: "Name is required" });
+      return;
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ success: false, message: "A valid email address is required" });
+      return;
+    }
+
+    // $25 tour fee = 2500 cents
+    const TOUR_AMOUNT_CENTS = 2500;
+
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: TOUR_AMOUNT_CENTS,
+      currency: "usd",
+      receipt_email: email,
+      payment_method_types: ["card"],
+      metadata: {
+        tourType: "physical_tour",
+        customerName: name,
+        customerEmail: email,
+        customerPhone: phone || "N/A",
+        userId
+      },
+      description: `Tropica Physical Tour - ${name} - $25 Deposit`
+    });
+
+    logger.info(`[Tour] Created PaymentIntent for ${name} (${email}): ${paymentIntent.id}`);
+
+    res.json({
+      success: true,
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id
+    });
+  } catch (error: any) {
+    logger.error("[Tour] Failed to create tour payment intent:", error);
+    next(new Error(`Failed to initialize payment: ${error.message}`));
+  }
+};
+
+
+export const getTourCheckouts = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({ success: false, message: "Stripe not configured" });
+      return;
+    }
+
+    // Fetch recent PaymentIntents filtered to physical_tour metadata
+    const paymentIntents = await stripe.paymentIntents.list({
+      limit: 100
+    });
+
+    const tourPayments = paymentIntents.data
+      .filter((pi) => pi.metadata?.tourType === "physical_tour")
+      .map((pi) => ({
+        id: pi.id,
+        amount: pi.amount / 100,
+        currency: pi.currency.toUpperCase(),
+        status: pi.status,
+        customerName: pi.metadata?.customerName || "—",
+        customerEmail: pi.metadata?.customerEmail || pi.receipt_email || "—",
+        customerPhone: pi.metadata?.customerPhone || "—",
+        userId: pi.metadata?.userId || "guest",
+        created: new Date(pi.created * 1000).toISOString(),
+        description: pi.description || "Physical Tour Deposit"
+      }));
+
+    res.json({
+      success: true,
+      total: tourPayments.length,
+      tourCheckouts: tourPayments
+    });
+  } catch (error: any) {
+    logger.error("[Admin] Failed to fetch tour checkouts:", error);
+    next(new Error(`Failed to fetch tour checkouts: ${error.message}`));
+  }
+};
