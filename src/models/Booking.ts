@@ -171,7 +171,7 @@ const bookingSchema = new Schema<IBooking>(
     customerName: { type: String, required: true, trim: true, maxlength: 100 },
     customerEmail: { type: String, required: true, trim: true, lowercase: true },
     customerPhone: { type: String, required: true, trim: true, maxlength: 20 },
-    notes: { type: String, trim: true, maxlength: 500 },
+    notes: { type: String, trim: true, maxlength: 3000 },
     occasion: { type: String, required: true, trim: true },
     cakeDetails: { type: String, trim: true, maxlength: 500 }, // Legacy
     cakePrice: { type: Number, min: 0, default: 0 }, // Legacy
@@ -225,7 +225,7 @@ const bookingSchema = new Schema<IBooking>(
       default: {}
     },
     offerPrice: { type: Number },
-    negotiationNotes: { type: String, trim: true, maxlength: 500 },
+    negotiationNotes: { type: String, trim: true, maxlength: 3000 },
     offerStatus: { type: String, enum: ["pending", "offered", "accepted", "declined"], default: "pending" },
     foodBasePrice: { type: Number },
     foodServiceFee: { type: Number, default: 50 },

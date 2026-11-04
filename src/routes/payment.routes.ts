@@ -7,7 +7,8 @@ import {
   verifyCheckoutSession,
   verifyPaymentIntent,
   uploadZelleProof,
-  handleGHLZelleWebhook
+  handleGHLZelleWebhook,
+  createTourCheckoutSession
 } from "../controllers/payment.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
@@ -23,6 +24,9 @@ router.post("/zelle/webhook", express.json(), handleGHLZelleWebhook);
 
 // Zelle proof upload
 router.post("/upload-zelle-proof", express.json({ limit: "15mb" }), uploadZelleProof);
+
+// Tour booking — public (no auth required, $25 flat fee)
+router.post("/tour-checkout-session", express.json(), createTourCheckoutSession);
 
 // Protected routes - need express.json() manually because they are mounted before the global parser in index.ts
 router.post("/checkout-session", express.json(), authMiddleware, createCheckoutSession);

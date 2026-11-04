@@ -1341,3 +1341,80 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
   }
 };
 
+
+/**
+ * Tour Checkout Session
+ * Creates a Stripe Checkout session for the $25 physical tour booking fee.
+ * No authentication required — anyone can book a tour.
+ */
+export const createTourCheckoutSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const stripe = getStripe();
+    if (!stripe) {
+      res.status(503).json({
+        success: false,
+        code: "STRIPE_NOT_CONFIGURED",
+        message: "Payments are not configured. Please contact us to set up your Stripe integration."
+      });
+      return;
+    }
+
+    const name = String(req.body.name || "").trim();
+    const email = String(req.body.email || "").trim();
+    const phone = String(req.body.phone || "").trim();
+
+    if (!name) {
+      res.status(400).json({ success: false, message: "Name is required" });
+      return;
+    }
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ success: false, message: "A valid email address is required" });
+      return;
+    }
+
+    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+
+    // $25 tour fee — always charge the real amount
+    const TOUR_AMOUNT_CENTS = 2500; // $25.00
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      billing_address_collection: "auto",
+      customer_email: email,
+      line_items: [
+        {
+          quantity: 1,
+          price_data: {
+            currency: "usd",
+            product_data: {
+              name: "Tropica Sanctuary – Physical Tour",
+              description: `In-person guided tour for ${name}. This $25 fee is credited toward your venue booking.`,
+              images: []
+            },
+            unit_amount: TOUR_AMOUNT_CENTS
+          }
+        }
+      ],
+      metadata: {
+        tourType: "physical_tour",
+        customerName: name,
+        customerEmail: email,
+        customerPhone: phone || "N/A",
+        userId: String(req.body.userId || "guest")
+      },
+      payment_intent_data: {
+        description: `Tropica Physical Tour – ${name} – $25 Deposit`
+      },
+      success_url: `${baseUrl}/book-tour/confirmed?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/book-tour/failed`
+    });
+
+    logger.info(`[Tour] Created Stripe checkout for ${name} (${email}): ${session.id}`);
+
+    res.json({ success: true, url: session.url });
+  } catch (error: any) {
+    logger.error("[Tour] Stripe checkout session error:", error);
+    next(new Error(`Tour checkout error: ${error.message}`));
+  }
+};

@@ -41,7 +41,7 @@ export const createBookingValidator = [
     .optional({ checkFalsy: true })
     .isString()
     .trim(),
-  body("notes").optional().isString().trim().isLength({ max: 500 }).withMessage("Notes must be up to 500 characters"),
+  body("notes").optional().isString().trim().isLength({ max: 3000 }).withMessage("Notes must be up to 3000 characters"),
   body("cakeDetails")
     .optional()
     .isString()
