@@ -25,6 +25,9 @@ export interface ISystemSettings extends Document {
   extraHourPrice: number; // Default: $125/hr (beyond 5 hours)
   minDepositAmount: number; // Default: $200
 
+  // Data migration marker (see getSettings)
+  pricingVersion: number;
+
   // Audit History
   auditHistory: IAuditEntry[];
 
@@ -32,7 +35,9 @@ export interface ISystemSettings extends Document {
   updatedAt: Date;
 }
 
-const auditEntrySchema = new Schema<IAuditEntry>(
+const CURRENT_PRICING_VERSION = 1;
+
+const auditEntrySchema =new Schema<IAuditEntry>(
   {
     modifiedBy: { type: Schema.Types.Mixed, required: true },
     modifiedByName: { type: String, trim: true },
@@ -58,6 +63,8 @@ const systemSettingsSchema = new Schema<ISystemSettings>(
     extraHourPrice: { type: Number, default: 125, min: 0 },
     minDepositAmount: { type: Number, default: 200, min: 0 },
 
+    pricingVersion: { type: Number, default: 0 },
+
     auditHistory: [auditEntrySchema]
   },
   { timestamps: true }
@@ -80,8 +87,26 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
       photographerExtraHourPrice: 150,
       extraHourPrice: 125,
       minDepositAmount: 200,
+      pricingVersion: CURRENT_PRICING_VERSION,
       auditHistory: []
     });
+  }
+
+  // One-time migration: legacy $35/guest rate → $50/guest.
+  if ((settings.pricingVersion ?? 0) < CURRENT_PRICING_VERSION) {
+    const previous = settings.perGuestPrice;
+    if (previous === 35) {
+      settings.perGuestPrice = 50;
+      settings.auditHistory.push({
+        modifiedBy: "system",
+        modifiedByName: "System Migration",
+        modifiedAt: new Date(),
+        changes: { perGuestPrice: { previous, current: 50 } },
+        notes: "Per-guest rate updated from $35 to $50"
+      });
+    }
+    settings.pricingVersion = CURRENT_PRICING_VERSION;
+    await settings.save();
   }
   return settings;
 };
