@@ -17,7 +17,7 @@ const LEAD_CONNECTOR_WEBHOOK_URL =
   process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
   "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723";
 
-export const MIN_PRIVATE_GUESTS = 8;
+export const MIN_PRIVATE_GUESTS = 10;
 
 const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>) => {
   if (!LEAD_CONNECTOR_WEBHOOK_URL) return;
@@ -151,7 +151,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const perGuestRate = settings.perGuestPrice || 35;
+    const perGuestRate = settings.perGuestPrice || 50;
     const baseCost = partySize * perGuestRate;
     const djCost = needDj ? (settings.djPrice ?? 300) : 0;
     const extraHoursCost = durationHours > 5 ? (durationHours - 5) * (settings.extraHourPrice ?? 125) : 0;
