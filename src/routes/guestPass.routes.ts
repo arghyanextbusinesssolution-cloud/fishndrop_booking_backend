@@ -6,7 +6,8 @@ import {
   updateGuestPassStatus,
   getGuestPassByQrToken,
   getMyCelebrations,
-  getMyInvites
+  getMyInvites,
+  cancelMyGuestPass
 } from "../controllers/guestPass.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
@@ -20,6 +21,7 @@ router.get("/my/invites", authMiddleware, getMyInvites);
 router.get("/pass/:qrToken", getGuestPassByQrToken);
 router.get("/:token", getInvitationDetails);
 router.post("/:token/rsvp", authMiddleware, registerGuestForBooking);
+router.post("/:token/cancel", authMiddleware, cancelMyGuestPass);
 
 // Host protected management
 router.get("/booking/:bookingId/guests", authMiddleware, getBookingGuestPasses);

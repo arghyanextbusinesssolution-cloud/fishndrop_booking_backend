@@ -9,7 +9,9 @@ export interface IGuestPass extends Document {
   guestPhone: string;
   qrCodeToken: string;
   passCode: string; // e.g. TRP-GP-9A8B7C
-  status: "pending_approval" | "approved" | "rejected";
+  status: "pending_approval" | "approved" | "rejected" | "cancelled";
+  joinedAt?: Date; // when the guest (re)joined; starts the 48h cancel window
+  cancelledAt?: Date; // guest said they are not attending
   checkedIn: boolean;
   checkedInAt?: Date;
   checkedInBy?: Types.ObjectId;
@@ -30,7 +32,7 @@ const guestPassSchema = new Schema<IGuestPass>(
     passCode: { type: String, required: true, unique: true, index: true },
     status: {
       type: String,
-      enum: ["pending_approval", "approved", "rejected"],
+      enum: ["pending_approval", "approved", "rejected", "cancelled"],
       default: "approved",
       index: true
     },
@@ -38,7 +40,9 @@ const guestPassSchema = new Schema<IGuestPass>(
     checkedInAt: { type: Date },
     checkedInBy: { type: Schema.Types.ObjectId, ref: "User" },
     checkedInByName: { type: String, trim: true },
-    notes: { type: String, trim: true }
+    notes: { type: String, trim: true },
+    joinedAt: { type: Date },
+    cancelledAt: { type: Date }
   },
   { timestamps: true }
 );

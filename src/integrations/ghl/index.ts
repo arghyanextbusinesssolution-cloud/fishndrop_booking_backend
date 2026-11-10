@@ -40,6 +40,7 @@ export type { TicketGuestAction, TicketGuestInfo } from "./triggers/ticket/ticke
 // Private-event guest passes
 export { sendGHLGuestPassIssuedEvent } from "./triggers/guestPass/guestPassIssued.trigger";
 export { sendGHLGuestPassCheckedInEvent } from "./triggers/guestPass/guestPassCheckedIn.trigger";
+export { sendGHLGuestPassCancelledEvent } from "./triggers/guestPass/guestPassCancelled.trigger";
 
 // Staff
 export { sendGHLEmployeeCreatedEvent } from "./triggers/employee/employeeCreated.trigger";

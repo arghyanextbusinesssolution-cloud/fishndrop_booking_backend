@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import Booking from "../models/Booking";
 import GuestPass, { generateGuestPassCode, generateGuestQrToken } from "../models/GuestPass";
 import logger from "../config/logger";
-import { sendGHLGuestPassIssuedEvent } from "../integrations/ghl";
+import { sendGHLGuestPassIssuedEvent, sendGHLGuestPassCancelledEvent } from "../integrations/ghl";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
 
@@ -36,12 +36,27 @@ const optionalUserId = (req: Request): string | null => {
 
 const firstName = (n?: string) => (n || "").trim().split(/\s+/)[0] || "Your host";
 const activeStatuses = { $in: ["approved", "pending_approval"] };
+
+/** Guests may say they're not attending until 48h after they joined the guest list. */
+export const GUEST_PASS_CANCEL_WINDOW_MS = 48 * 60 * 60 * 1000;
+const cancelDeadline = (p: any): Date | null => {
+  const joined = p?.joinedAt || p?.createdAt;
+  return joined ? new Date(new Date(joined).getTime() + GUEST_PASS_CANCEL_WINDOW_MS) : null;
+};
+const canGuestCancel = (p: any): boolean => {
+  if (!p || p.checkedIn || !["approved", "pending_approval"].includes(p.status)) return false;
+  const d = cancelDeadline(p);
+  return !!d && Date.now() <= d.getTime();
+};
+
 const passPublic = (p: any) => ({
   passCode: p.passCode,
   qrCodeToken: p.qrCodeToken,
   status: p.status,
   guestName: p.guestName,
-  checkedIn: p.checkedIn
+  checkedIn: p.checkedIn,
+  cancelDeadline: cancelDeadline(p),
+  canCancel: canGuestCancel(p)
 });
 
 /**
@@ -141,6 +156,32 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
       booking: booking._id,
       $or: [{ user: guest._id }, { guestPhone: guest.phone }]
     });
+    if (existingPass && existingPass.status === "cancelled") {
+      const activeCount = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
+      if (activeCount >= booking.partySize) {
+        res.status(403).json({
+          success: false,
+          code: "CAPACITY_REACHED",
+          message: `The guest list is full (${booking.partySize} guests). Please contact ${firstName(booking.customerName)}.`
+        });
+        return;
+      }
+      existingPass.user = guest._id as any;
+      existingPass.guestName = guestName;
+      existingPass.status = booking.requireHostApproval ? "pending_approval" : "approved";
+      existingPass.qrCodeToken = generateGuestQrToken();
+      existingPass.joinedAt = new Date();
+      existingPass.cancelledAt = undefined;
+      await existingPass.save();
+      logger.info(`Guest ${guestName} re-joined booking #${booking._id} with pass ${existingPass.passCode}`);
+      void sendGHLGuestPassIssuedEvent(existingPass, booking);
+      res.status(201).json({
+        success: true,
+        message: existingPass.status === "approved" ? "You're back on the guest list!" : "Request sent! Your host will approve you soon.",
+        pass: passPublic(existingPass)
+      });
+      return;
+    }
     if (existingPass) {
       if (!existingPass.user) {
         existingPass.user = guest._id as any;
@@ -170,7 +211,8 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
       passCode: generateGuestPassCode(),
       qrCodeToken: generateGuestQrToken(),
       status: passStatus,
-      checkedIn: false
+      checkedIn: false,
+      joinedAt: new Date()
     });
 
     logger.info(`Issued guest pass ${pass.passCode} to ${guestName} for booking #${booking._id}`);
@@ -183,6 +225,70 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
     });
   } catch (error: any) {
     next(new Error(`Failed to complete RSVP: ${error.message}`));
+  }
+};
+
+/**
+ * POST /api/invitations/:token/cancel   (requires login)
+ * Guest says they're not attending. Allowed until 48h after they joined.
+ * The pass stops working and the spot opens up again on the guest list.
+ */
+export const cancelMyGuestPass = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: "Please sign in" });
+      return;
+    }
+    const token = sanitizeString(req.params.token);
+    const booking = await Booking.findOne({ invitationToken: token });
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Invitation not found" });
+      return;
+    }
+
+    const me = await User.findById(req.user._id).select("phone isPhoneVerified").lean();
+    const or: any[] = [{ user: req.user._id }];
+    if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
+    const pass = await GuestPass.findOne({ booking: booking._id, $or: or, status: activeStatuses });
+    if (!pass) {
+      res.status(404).json({ success: false, message: "You're not on this guest list" });
+      return;
+    }
+    if (pass.checkedIn) {
+      res.status(409).json({ success: false, message: "This pass was already used at the door" });
+      return;
+    }
+    if (!canGuestCancel(pass)) {
+      res.status(403).json({
+        success: false,
+        code: "CANCEL_WINDOW_CLOSED",
+        message: "You can only cancel within 48 hours of joining the guest list."
+      });
+      return;
+    }
+
+    const updated = await GuestPass.findOneAndUpdate(
+      { _id: pass._id, status: pass.status, checkedIn: false },
+      { $set: { status: "cancelled", cancelledAt: new Date(), qrCodeToken: generateGuestQrToken() } },
+      { returnDocument: "after" }
+    );
+    if (!updated) {
+      res.status(409).json({ success: false, message: "Your pass changed. Please refresh." });
+      return;
+    }
+
+    const active = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
+    const spotsRemaining = Math.max(0, booking.partySize - active);
+    logger.info(`Guest ${updated.guestName} cancelled pass ${updated.passCode} for booking #${booking._id} (not attending)`);
+    void sendGHLGuestPassCancelledEvent(updated, booking, spotsRemaining);
+
+    res.status(200).json({
+      success: true,
+      message: `You're off the guest list. ${firstName(booking.customerName)} has been notified.`,
+      pass: passPublic(updated)
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to cancel your spot: ${error.message}`));
   }
 };
 
@@ -284,6 +390,11 @@ export const updateGuestPassStatus = async (req: Request, res: Response, next: N
 
     if (!isOwner && !isAdmin) {
       res.status(403).json({ success: false, message: "Forbidden" });
+      return;
+    }
+
+    if (pass.status === "cancelled") {
+      res.status(409).json({ success: false, message: "This guest cancelled. They're not attending." });
       return;
     }
 
@@ -414,7 +525,7 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
     const or: any[] = [{ user: req.user._id }];
     if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
 
-    const passes = await GuestPass.find({ $or: or, status: { $ne: "rejected" } })
+    const passes = await GuestPass.find({ $or: or, status: { $nin: ["rejected", "cancelled"] } })
       .populate("booking", "customerName occasion bookingDate bookingTime eventEndTime durationHours status invitationToken user")
       .sort({ createdAt: -1 })
       .limit(100)
@@ -435,7 +546,9 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
         passCode: p.passCode,
         qrCodeToken: p.qrCodeToken,
         status: p.status,
-        checkedIn: p.checkedIn
+        checkedIn: p.checkedIn,
+        cancelDeadline: cancelDeadline(p),
+        canCancel: canGuestCancel(p)
       }));
 
     res.status(200).json({ success: true, invites });
@@ -465,7 +578,7 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
     const isPrivate = booking.bookingType === "private_event";
     const passes = isPrivate
       ? await GuestPass.find({ booking: booking._id })
-          .select("guestName guestPhone guestEmail passCode status checkedIn checkedInAt checkedInByName createdAt")
+          .select("guestName guestPhone guestEmail passCode status checkedIn checkedInAt checkedInByName createdAt cancelledAt")
           .sort({ createdAt: 1 })
           .lean()
       : [];
@@ -473,6 +586,7 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
     const approved = passes.filter((p) => p.status === "approved");
     const pending = passes.filter((p) => p.status === "pending_approval");
     const rejected = passes.filter((p) => p.status === "rejected");
+    const cancelled = passes.filter((p) => p.status === "cancelled");
     const arrived = passes.filter((p) => p.checkedIn);
     const signedUp = approved.length + pending.length;
     const capacity = booking.partySize || 0;
@@ -489,6 +603,7 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
         approved: approved.length,
         pendingApproval: pending.length,
         rejected: rejected.length,
+        cancelled: cancelled.length,
         spotsLeft: Math.max(0, capacity - signedUp),
         arrived: arrived.length,
         notArrived: Math.max(0, approved.length - arrived.length),

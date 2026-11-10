@@ -262,6 +262,14 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         });
         return;
       }
+      if (guestPass.status === "cancelled") {
+        res.status(400).json({
+          success: false,
+          code: "PASS_CANCELLED",
+          message: "This guest cancelled. They told the host they are not attending."
+        });
+        return;
+      }
       if (guestPass.status !== "approved") {
         res.status(400).json({
           success: false,
