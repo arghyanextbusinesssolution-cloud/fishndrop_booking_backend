@@ -34,6 +34,8 @@ export { sendGHLPromoterEventCreatedEvent } from "./triggers/event/promoterEvent
 // Tickets
 export { sendGHLTicketPurchasedEvent } from "./triggers/ticket/ticketPurchased.trigger";
 export { sendGHLTicketCheckedInEvent } from "./triggers/ticket/ticketCheckedIn.trigger";
+export { sendGHLTicketGuestEvent } from "./triggers/ticket/ticketGuest.trigger";
+export type { TicketGuestAction, TicketGuestInfo } from "./triggers/ticket/ticketGuest.trigger";
 
 // Private-event guest passes
 export { sendGHLGuestPassIssuedEvent } from "./triggers/guestPass/guestPassIssued.trigger";

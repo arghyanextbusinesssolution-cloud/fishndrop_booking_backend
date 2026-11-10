@@ -5,6 +5,7 @@ import Event from "../models/Event";
 import GuestPass from "../models/GuestPass";
 import { sendGHLTicketCheckedInEvent, sendGHLGuestPassCheckedInEvent } from "../integrations/ghl";
 import logger from "../config/logger";
+import { isLiveQrToken, parseLiveQr, verifyLiveQr } from "../utils/liveQr.utils";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -95,15 +96,57 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
       return;
     }
 
-    // 1. Try finding in Event Tickets
-    const ticket = await Ticket.findOne({
-      $or: [{ qrCodeToken: rawCode }, { ticketCode: rawCode.toUpperCase() }]
-    }).populate("event");
+    // 1. Event tickets. Guest-sharing tickets only admit with the rotating live QR
+    //    (tk_…, valid 5 minutes from issue) or a ticket code typed by staff; a static QR screenshot is refused.
+    let ticket;
+    if (isLiveQrToken(rawCode)) {
+      const parsed = parseLiveQr(rawCode);
+      ticket = parsed ? await Ticket.findById(parsed.ticketId).populate("event") : null;
+      const check = ticket ? verifyLiveQr(rawCode, ticket.qrCodeToken) : "invalid";
+      if (check !== "ok") {
+        res.status(check === "expired" ? 400 : 404).json({
+          success: false,
+          code: check === "expired" ? "QR_EXPIRED" : "INVALID_TICKET",
+          message:
+            check === "expired"
+              ? "QR EXPIRED: this code is older than 5 minutes (likely a screenshot). Ask the guest to open their live ticket in the app."
+              : "Admission not recognized. Invalid QR code."
+        });
+        return;
+      }
+    } else {
+      ticket = await Ticket.findOne({
+        $or: [{ qrCodeToken: rawCode }, { ticketCode: rawCode.toUpperCase() }]
+      }).populate("event");
+      if (ticket && ticket.holderStatus && ticket.qrCodeToken === rawCode) {
+        res.status(400).json({
+          success: false,
+          code: "STATIC_QR_NOT_ACCEPTED",
+          message: "Old or screenshot QR. Ask the guest to open their live ticket in the app (the code changes every 5 minutes)."
+        });
+        return;
+      }
+    }
 
     const isPromoter = req.user?.role === "promoter";
 
     if (ticket) {
       const event = ticket.event as any;
+      const attendeeName = ticket.holderName || ticket.customerName;
+      const tierLabel =
+        ticket.holderStatus && !ticket.isBuyerSeat ? `${ticket.tierName} · Guest of ${ticket.customerName}` : ticket.tierName;
+
+      if (ticket.holderStatus && ticket.holderStatus !== "accepted") {
+        res.status(400).json({
+          success: false,
+          code: ticket.holderStatus === "pending" ? "GUEST_NOT_APPROVED" : "SEAT_NOT_ASSIGNED",
+          message:
+            ticket.holderStatus === "pending"
+              ? `${attendeeName} is still waiting for ${ticket.customerName} to accept them.`
+              : `This seat on ${ticket.customerName}'s order hasn't been given to anyone yet.`
+        });
+        return;
+      }
 
       if (isPromoter && String(ticket.promoter) !== req.user!._id.toString()) {
         res.status(403).json({
@@ -142,8 +185,8 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
           message: `DUPLICATE ADMISSION: Already checked in at ${checkInTime} by ${ticket.checkedInByName || "Staff"}.`,
           ticket: {
             ticketCode: ticket.ticketCode,
-            customerName: ticket.customerName,
-            tierName: ticket.tierName,
+            customerName: attendeeName,
+            tierName: tierLabel,
             checkedInAt: ticket.checkedInAt?.toISOString(),
             checkedInByName: ticket.checkedInByName
           }
@@ -151,12 +194,26 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         return;
       }
 
+      // Atomic: two doors scanning the same code at once can't both admit it
+      const checkedInAt = new Date();
+      const staffName = req.user?.name || "Staff Member";
+      const admitted = await Ticket.updateOne(
+        { _id: ticket._id, checkedIn: false },
+        { $set: { checkedIn: true, checkedInAt, checkedInBy: req.user?._id, checkedInByName: staffName, status: "used" } }
+      );
+      if (admitted.modifiedCount === 0) {
+        res.status(409).json({
+          success: false,
+          code: "ALREADY_CHECKED_IN",
+          message: "DUPLICATE ADMISSION: This ticket was just checked in at another door.",
+          ticket: { ticketCode: ticket.ticketCode, customerName: attendeeName, tierName: tierLabel }
+        });
+        return;
+      }
       ticket.checkedIn = true;
-      ticket.checkedInAt = new Date();
-      ticket.checkedInBy = req.user?._id;
-      ticket.checkedInByName = req.user?.name || "Staff Member";
+      ticket.checkedInAt = checkedInAt;
+      ticket.checkedInByName = staffName;
       ticket.status = "used";
-      await ticket.save();
 
       logger.info(`Staff ${ticket.checkedInByName} checked in ticket ${ticket.ticketCode} for ${event?.title}`);
 
@@ -165,12 +222,12 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
       res.status(200).json({
         success: true,
         code: "CHECK_IN_SUCCESS",
-        message: `Admission Confirmed! Welcome, ${ticket.customerName}.`,
+        message: `Admission Confirmed! Welcome, ${attendeeName}.`,
         ticket: {
           ticketCode: ticket.ticketCode,
-          customerName: ticket.customerName,
-          customerEmail: ticket.customerEmail,
-          tierName: ticket.tierName,
+          customerName: attendeeName,
+          customerEmail: ticket.holderEmail || ticket.customerEmail,
+          tierName: tierLabel,
           eventTitle: event?.title,
           venueName: event?.venueName,
           checkedInAt: ticket.checkedInAt.toISOString(),
@@ -290,18 +347,29 @@ export const searchTickets = async (req: Request, res: Response, next: NextFunct
       $or: [
         { ticketCode: { $regex: safe, $options: "i" } },
         { customerName: { $regex: safe, $options: "i" } },
+        { holderName: { $regex: safe, $options: "i" } },
         { customerEmail: { $regex: safe, $options: "i" } },
-        ...(digits.length >= 3 ? [{ customerPhone: { $regex: digits } }] : [])
+        ...(digits.length >= 3 ? [{ customerPhone: { $regex: digits } }, { holderPhone: { $regex: digits } }] : [])
       ]
     };
 
     const isPromoter = req.user?.role === "promoter";
     if (isPromoter) ticketFilter.promoter = req.user!._id;
 
-    const tickets = await Ticket.find(ticketFilter)
+    const ticketDocs = await Ticket.find(ticketFilter)
       .populate("event", "title date venueName startTime")
       .limit(15)
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+    const tickets = ticketDocs.map((t: any) => ({
+      ...t,
+      customerName: t.holderName || (t.holderStatus === "unassigned" ? `Open seat (${t.customerName})` : t.customerName),
+      customerPhone: t.holderPhone || t.customerPhone,
+      tierName:
+        t.holderStatus && !t.isBuyerSeat
+          ? `${t.tierName} · ${t.holderStatus === "accepted" ? `Guest of ${t.customerName}` : t.holderStatus === "pending" ? "Awaiting buyer approval" : "Unassigned"}`
+          : t.tierName
+    }));
 
     const passFilter: any = {
       $or: [

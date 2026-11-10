@@ -33,6 +33,7 @@ const authMiddleware = async (req: Request, res: Response, next: NextFunction): 
       name: user.name || "",
       phone: user.phone,
       isPhoneVerified: user.isPhoneVerified,
+      dateOfBirth: user.dateOfBirth,
       companyName: user.companyName,
       promoterStatus: user.promoterStatus,
       stripeConnectOnboarded: user.stripeConnectOnboarded,

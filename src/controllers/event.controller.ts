@@ -520,7 +520,7 @@ export const getEventBookings = async (req: Request, res: Response, next: NextFu
     const [orders, tickets] = await Promise.all([
       TicketOrder.find(orderFilter).sort({ paidAt: -1, createdAt: -1 }).lean(),
       Ticket.find({ event: event._id })
-        .select("ticketCode order tierName price status checkedIn checkedInAt checkedInByName customerName")
+        .select("ticketCode order tierName price status checkedIn checkedInAt checkedInByName customerName isBuyerSeat holderStatus holderName")
         .lean()
     ]);
 
@@ -535,7 +535,10 @@ export const getEventBookings = async (req: Request, res: Response, next: NextFu
         status: t.status,
         checkedIn: t.checkedIn,
         checkedInAt: t.checkedInAt,
-        checkedInByName: t.checkedInByName
+        checkedInByName: t.checkedInByName,
+        holderStatus: t.holderStatus || "accepted",
+        holderName: t.holderName || (t.holderStatus ? "" : t.customerName),
+        isBuyerSeat: !!t.isBuyerSeat
       });
     }
 

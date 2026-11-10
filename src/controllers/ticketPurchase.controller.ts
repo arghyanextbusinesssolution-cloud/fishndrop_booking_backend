@@ -2,17 +2,22 @@ import { NextFunction, Request, Response } from "express";
 import mongoose from "mongoose";
 import Event from "../models/Event";
 import TicketOrder, { generateOrderNumber } from "../models/TicketOrder";
-import Ticket, { generateTicketCode, generateQrCodeToken } from "../models/Ticket";
+import Ticket, { ITicket, generateTicketCode, generateQrCodeToken } from "../models/Ticket";
 import User from "../models/User";
 import SystemSettings from "../models/SystemSettings";
 import { getStripe } from "../utils/stripe.utils";
 import { sendGHLTicketPurchasedEvent } from "../integrations/ghl";
+import { seatForBuyer } from "./ticketShare.controller";
 import logger from "../config/logger";
 import { SALES_CLOSE_MINUTES, isSalesClosed } from "../utils/eventTime.utils";
 import crypto from "crypto";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
+
+/** Accepted guests may give their ticket back until 48h after purchase. */
+export const GUEST_CANCEL_WINDOW_MS = 48 * 60 * 60 * 1000;
+export const generateShareToken = (): string => `shr_${crypto.randomBytes(18).toString("hex")}`;
 
 const getFrontendBaseUrl = (): string => {
   return process.env.FRONTEND_BASE_URL || "http://localhost:3000";
@@ -241,6 +246,7 @@ export const createTicketCheckout = async (req: Request, res: Response, next: Ne
       customerName,
       customerEmail,
       customerPhone,
+      customerDob: buyer.dateOfBirth,
       items: orderItems,
       subtotal,
       platformFee,
@@ -464,13 +470,22 @@ export const fulfillTicketOrder = async (orderId: string, txnId?: string): Promi
 
   // Atomic state transition: only ONE caller (Stripe webhook or success page) may fulfil.
   const previousStatus = existing.status;
+  const paidAt = new Date();
+  const seatCount = (existing.items || []).reduce((sum, i) => sum + i.quantity, 0);
   const order = await TicketOrder.findOneAndUpdate(
     { _id: existing._id, status: { $in: ["pending", "failed"] } },
     {
       $set: {
         status: "paid",
-        paidAt: new Date(),
-        ...(txnId ? { stripePaymentIntentId: txnId } : {})
+        paidAt,
+        ...(txnId ? { stripePaymentIntentId: txnId } : {}),
+        // Multi-ticket orders: buyer keeps seat #1 and shares one link for the rest
+        ...(seatCount > 1
+          ? {
+              shareToken: generateShareToken(),
+              guestCancelDeadline: new Date(paidAt.getTime() + GUEST_CANCEL_WINDOW_MS)
+            }
+          : {})
       }
     },
     { returnDocument: "after" }
@@ -506,10 +521,12 @@ export const fulfillTicketOrder = async (orderId: string, txnId?: string): Promi
     );
   }
 
-  // Create individual Ticket records with unique codes & QR tokens
-  const createdTickets = [];
+  // Create individual Ticket records with unique codes & QR tokens.
+  // Seat #1 belongs to the buyer; the rest stay unassigned until a guest claims one.
+  const createdTickets: ITicket[] = [];
   for (const item of order.items) {
     for (let i = 0; i < item.quantity; i++) {
+      const isBuyerSeat = createdTickets.length === 0;
       const ticket = await Ticket.create({
         ticketCode: generateTicketCode(),
         order: order._id,
@@ -524,7 +541,18 @@ export const fulfillTicketOrder = async (orderId: string, txnId?: string): Promi
         customerPhone: order.customerPhone,
         qrCodeToken: generateQrCodeToken(),
         status: "valid",
-        checkedIn: false
+        checkedIn: false,
+        isBuyerSeat,
+        ...(isBuyerSeat
+          ? {
+              holderStatus: "accepted",
+              holderUser: order.user,
+              holderName: order.customerName,
+              holderPhone: order.customerPhone,
+              holderEmail: order.customerEmail,
+              acceptedAt: paidAt
+            }
+          : { holderStatus: "unassigned" })
       });
       createdTickets.push(ticket);
     }
@@ -618,7 +646,7 @@ export const verifyTicketOrder = async (req: Request, res: Response, next: NextF
     }
 
     const { tickets } = await fulfillTicketOrder(order._id.toString(), paymentIntentId);
-    const pass = await TicketOrder.findById(order._id).select("qrMode groupQrToken").lean();
+    const pass = await TicketOrder.findById(order._id).select("shareToken guestCancelDeadline").lean();
 
     res.status(200).json({
       success: true,
@@ -630,15 +658,20 @@ export const verifyTicketOrder = async (req: Request, res: Response, next: NextF
         customerEmail: order.customerEmail,
         totalAmount: order.totalAmount,
         status: "paid",
-        qrMode: pass?.qrMode || null,
-        groupQrToken: pass?.qrMode === "group" ? pass.groupQrToken : null
+        shareToken: pass?.shareToken || null,
+        guestCancelDeadline: pass?.guestCancelDeadline || null
       },
       event: order.event,
       tickets: tickets.map((t: any) => ({
+        _id: t._id,
         ticketCode: t.ticketCode,
         tierName: t.tierName,
         customerName: t.customerName,
-        qrCodeToken: t.qrCodeToken,
+        // Only the buyer's own seat has a pass page; extra seats are claimed through the share link
+        qrCodeToken: !t.holderStatus || t.isBuyerSeat ? t.qrCodeToken : undefined,
+        isBuyerSeat: !!t.isBuyerSeat,
+        holderStatus: t.holderStatus || "accepted",
+        holderName: t.holderName || "",
         status: t.status,
         checkedIn: t.checkedIn
       }))
@@ -656,14 +689,26 @@ export const verifyTicketOrder = async (req: Request, res: Response, next: NextF
 export const getTicketByQrToken = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const qrToken = sanitizeString(req.params.qrToken);
-    const ticket = await Ticket.findOne({ qrCodeToken: qrToken }).populate("event");
+    const ticket = await Ticket.findOne({ qrCodeToken: qrToken })
+      .select("-customerEmail -customerPhone -holderPhone -holderEmail -checkedInBy -notes")
+      .populate("event", "title slug date startTime endTime venueName venueAddress venueType venueLat venueLng flyerUrl");
 
-    if (!ticket) {
+    if (!ticket || (ticket.holderStatus && ticket.holderStatus !== "accepted")) {
       res.status(404).json({ success: false, message: "Ticket not found or invalid QR code" });
       return;
     }
 
-    res.status(200).json({ success: true, ticket });
+    const t: any = ticket.toObject();
+    res.status(200).json({
+      success: true,
+      ticket: {
+        ...t,
+        // Seats under the guest-sharing flow use the rotating QR; the static token no longer admits.
+        liveQr: !!t.holderStatus,
+        attendeeName: t.holderName || t.customerName,
+        guestOf: t.holderStatus && !t.isBuyerSeat ? t.customerName : null
+      }
+    });
   } catch (error: any) {
     next(new Error(`Failed to fetch ticket: ${error.message}`));
   }
@@ -672,7 +717,8 @@ export const getTicketByQrToken = async (req: Request, res: Response, next: Next
 
 /**
  * GET /api/tickets/my
- * Tickets owned by the signed-in buyer (linked via account, or matching their verified phone).
+ *  tickets:      seats the signed-in user enters with (own seat, accepted/pending guest seats, legacy tickets)
+ *  sharedOrders: multi-ticket orders they bought, with the share link and guest list to manage
  */
 export const getMyTickets = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -681,39 +727,85 @@ export const getMyTickets = async (req: Request, res: Response, next: NextFuncti
       return;
     }
     const me = await User.findById(req.user._id).select("phone isPhoneVerified").lean();
-    const or: any[] = [{ user: req.user._id }];
-    if (me?.phone && me.isPhoneVerified) or.push({ customerPhone: me.phone });
+    const phone = me?.phone && me.isPhoneVerified ? me.phone : "";
+    const EVENT_SELECT = "title slug date startTime endTime venueName venueAddress flyerUrl status";
+    const active = { $in: ["accepted", "pending"] };
 
-    const tickets = await Ticket.find({ $or: or, status: { $in: ["valid", "used"] } })
-      .populate("event", "title slug date startTime endTime venueName venueAddress flyerUrl status")
+    const held = await Ticket.find({
+      status: { $in: ["valid", "used"] },
+      $or: [
+        // Guest-sharing seats I hold (or have requested)
+        { holderStatus: active, holderUser: req.user._id },
+        ...(phone ? [{ holderStatus: active, holderPhone: phone }] : []),
+        // Legacy tickets (before guest sharing): the buyer holds them all
+        { holderStatus: { $exists: false }, user: req.user._id },
+        ...(phone ? [{ holderStatus: { $exists: false }, customerPhone: phone }] : [])
+      ]
+    })
+      .populate("event", EVENT_SELECT)
       .sort({ createdAt: -1 })
       .limit(200)
       .lean();
 
-    const orders = await TicketOrder.find({ _id: { $in: [...new Set(tickets.map((t: any) => String(t.order)))] } })
-      .select("orderNumber qrMode groupQrToken")
+    const boughtOrders = await TicketOrder.find({
+      status: "paid",
+      shareToken: { $exists: true },
+      $or: [{ user: req.user._id }, ...(phone ? [{ customerPhone: phone }] : [])]
+    })
+      .select("orderNumber shareToken guestCancelDeadline event customerName paidAt")
+      .populate("event", EVENT_SELECT)
+      .sort({ paidAt: -1 })
+      .limit(50)
+      .lean();
+    const orderSeats = boughtOrders.length
+      ? await Ticket.find({ order: { $in: boughtOrders.map((o) => o._id) } }).sort({ createdAt: 1 }).lean()
+      : [];
+
+    const orderIds = [...new Set(held.map((t: any) => String(t.order)))];
+    const orders = await TicketOrder.find({ _id: { $in: orderIds } })
+      .select("orderNumber qrMode groupQrToken guestCancelDeadline customerName")
       .lean();
     const orderById = new Map(orders.map((o: any) => [String(o._id), o]));
+    const now = Date.now();
 
     res.status(200).json({
       success: true,
-      tickets: tickets.map((t: any) => ({
-        orderId: String(t.order),
-        orderNumber: orderById.get(String(t.order))?.orderNumber,
-        qrMode: orderById.get(String(t.order))?.qrMode || "individual",
-        groupQrToken:
-          orderById.get(String(t.order))?.qrMode === "group" ? orderById.get(String(t.order))?.groupQrToken : null,
-        _id: t._id,
-        ticketCode: t.ticketCode,
-        tierName: t.tierName,
-        price: t.price,
-        customerName: t.customerName,
-        qrCodeToken: t.qrCodeToken,
-        status: t.status,
-        checkedIn: t.checkedIn,
-        checkedInAt: t.checkedInAt,
-        createdAt: t.createdAt,
-        event: t.event
+      tickets: held.map((t: any) => {
+        const o: any = orderById.get(String(t.order)) || {};
+        const isLegacy = !t.holderStatus;
+        const isGuestSeat = !isLegacy && !t.isBuyerSeat;
+        const deadline = o.guestCancelDeadline ? new Date(o.guestCancelDeadline) : null;
+        return {
+          _id: t._id,
+          orderId: String(t.order),
+          orderNumber: o.orderNumber,
+          isLegacy,
+          legacyGroupQrToken: isLegacy && o.qrMode === "group" ? o.groupQrToken : null,
+          isBuyerSeat: !!t.isBuyerSeat,
+          holderStatus: t.holderStatus || "accepted",
+          holderName: t.holderName || t.customerName,
+          guestOf: isGuestSeat ? o.customerName || t.customerName : null,
+          canCancel:
+            isGuestSeat && !t.checkedIn && (t.holderStatus === "pending" || (!!deadline && now <= deadline.getTime())),
+          cancelDeadline: isGuestSeat && t.holderStatus === "accepted" ? deadline : null,
+          ticketCode: t.ticketCode,
+          tierName: t.tierName,
+          price: t.price,
+          qrCodeToken: t.holderStatus === "pending" ? undefined : t.qrCodeToken,
+          status: t.status,
+          checkedIn: t.checkedIn,
+          checkedInAt: t.checkedInAt,
+          createdAt: t.createdAt,
+          event: t.event
+        };
+      }),
+      sharedOrders: boughtOrders.map((o: any) => ({
+        orderId: o._id,
+        orderNumber: o.orderNumber,
+        shareToken: o.shareToken,
+        guestCancelDeadline: o.guestCancelDeadline,
+        event: o.event,
+        seats: orderSeats.filter((t: any) => String(t.order) === String(o._id)).map(seatForBuyer)
       }))
     });
   } catch (error: any) {
@@ -721,57 +813,9 @@ export const getMyTickets = async (req: Request, res: Response, next: NextFuncti
   }
 };
 
-const generateGroupQrToken = () => `grp_${crypto.randomBytes(24).toString("hex")}`;
-
-/**
- * POST /api/tickets/orders/:orderId/qr-mode   { mode: "individual" | "group" }
- * Buyer chooses one group QR for the whole order or a separate QR per ticket.
- * Either way each ticket keeps its own check-in state, so nobody can be admitted twice.
- */
-export const setOrderQrMode = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
-  try {
-    if (!req.user) {
-      res.status(401).json({ success: false, message: "Please sign in" });
-      return;
-    }
-    const orderId = sanitizeString(req.params.orderId);
-    const mode = req.body.mode === "group" ? "group" : req.body.mode === "individual" ? "individual" : null;
-    if (!/^[a-f0-9]{24}$/i.test(orderId) || !mode) {
-      res.status(400).json({ success: false, message: "Invalid request" });
-      return;
-    }
-
-    const order = await TicketOrder.findById(orderId);
-    if (!order || order.status !== "paid") {
-      res.status(404).json({ success: false, message: "Paid order not found" });
-      return;
-    }
-    const me = await User.findById(req.user._id).select("phone isPhoneVerified").lean();
-    const owns =
-      String(order.user || "") === String(req.user._id) ||
-      (!!me?.isPhoneVerified && !!me.phone && me.phone === order.customerPhone);
-    if (!owns) {
-      res.status(403).json({ success: false, message: "This order belongs to another account" });
-      return;
-    }
-
-    order.qrMode = mode;
-    if (mode === "group" && !order.groupQrToken) order.groupQrToken = generateGroupQrToken();
-    await order.save();
-
-    res.status(200).json({
-      success: true,
-      qrMode: order.qrMode,
-      groupQrToken: order.qrMode === "group" ? order.groupQrToken : null
-    });
-  } catch (error: any) {
-    next(new Error(`Failed to update QR preference: ${error.message}`));
-  }
-};
-
 /**
  * GET /api/tickets/group/:token
- * Public group pass: one QR that admits every ticket in the order.
+ * Legacy group pass (orders placed before guest sharing): one QR that admits the order.
  */
 export const getGroupPass = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {

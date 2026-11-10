@@ -7,6 +7,7 @@ export interface IBooking extends Document {
   customerName: string;
   customerEmail: string;
   customerPhone: string;
+  customerDob?: string; // "YYYY-MM-DD" host's birthday (birthday bonus)
   notes?: string;
   occasion: "birthday" | "anniversary" | "graduation" | "business" | "quiet" | "other";
   cakeDetails?: string; // Legacy
@@ -175,6 +176,7 @@ const bookingSchema = new Schema<IBooking>(
     customerName: { type: String, required: true, trim: true, maxlength: 100 },
     customerEmail: { type: String, required: true, trim: true, lowercase: true },
     customerPhone: { type: String, required: true, trim: true, maxlength: 20 },
+    customerDob: { type: String, trim: true },
     notes: { type: String, trim: true, maxlength: 3000 },
     occasion: { type: String, required: true, trim: true },
     cakeDetails: { type: String, trim: true, maxlength: 500 }, // Legacy

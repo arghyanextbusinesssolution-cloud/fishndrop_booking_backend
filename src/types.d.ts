@@ -7,6 +7,7 @@ export interface UserPayload {
   name?: string;
   phone?: string;
   isPhoneVerified?: boolean;
+      dateOfBirth?: string;
   companyName?: string;
   promoterStatus?: "pending" | "approved" | "rejected";
   stripeConnectOnboarded?: boolean;

@@ -7,6 +7,7 @@ import Table from "../../models/Table";
 import Booking from "../../models/Booking";
 import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
+import { isValidDob } from "../../utils/dob.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
 import { sendGHLLeadEvent, sendGHLZellePendingEvent, calculateEventTimes } from "../../integrations/ghl";
@@ -74,6 +75,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     let email = sanitizeString(req.body.customerEmail || req.body.email).toLowerCase();
     let phone = sanitizeString(req.body.customerPhone || req.body.phone);
     const password = sanitizeString(req.body.password);
+    const dobInput = sanitizeString(req.body.dateOfBirth);
+    const dateOfBirth = dobInput && isValidDob(dobInput) ? dobInput : "";
 
     const partySize = Number(req.body.partySize);
     const bookingDate = sanitizeString(req.body.bookingDate);
@@ -123,6 +126,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       let shouldSave = false;
       if (name && (!user.name || user.name === "Guest User")) { user.name = name; shouldSave = true; }
       if (email && !user.email) { user.email = email; shouldSave = true; }
+      if (dateOfBirth && user.dateOfBirth !== dateOfBirth) { user.dateOfBirth = dateOfBirth; shouldSave = true; }
       if (shouldSave) await user.save();
     } else {
       if (phone) {
@@ -139,12 +143,14 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       }
 
       if (!user) {
-        user = await User.create({ name, email, phone, isPhoneVerified: true, role: "user" });
+        user = await User.create({ name, email, phone, isPhoneVerified: true, role: "user", ...(dateOfBirth ? { dateOfBirth } : {}) });
         accountCreated = true;
       } else {
         if (name && (!user.name || user.name === "Guest User")) user.name = name;
         if (email && !user.email) user.email = email;
         if (phone && !user.phone) user.phone = phone;
+        // Unverified request: never overwrite a birthday the account owner already set
+        if (dateOfBirth && !user.dateOfBirth) user.dateOfBirth = dateOfBirth;
         await user.save();
       }
     }
@@ -211,6 +217,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       customerName: name,
       customerEmail: email,
       customerPhone: phone,
+      customerDob: dateOfBirth || user!.dateOfBirth || undefined,
       notes,
       occasion,
       needDj,

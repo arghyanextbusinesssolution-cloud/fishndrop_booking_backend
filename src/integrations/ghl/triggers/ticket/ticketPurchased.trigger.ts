@@ -2,6 +2,7 @@ import { getPublicLinkBase } from "../../config";
 import { safeTrigger } from "../../client";
 import { nowIso, splitName, toId } from "../../helpers/common";
 import { toDateOnly, toIsoOrEmpty } from "../../helpers/time";
+import { birthdayFields } from "../../../../utils/dob.utils";
 
 const to12h = (t?: string) => {
   const m = /^(\d{1,2}):(\d{2})$/.exec(t || "");
@@ -77,6 +78,9 @@ export const sendGHLTicketPurchasedEvent = async (
         email: order.customerEmail,
         phone: order.customerPhone,
 
+        // Birthday bonus (dateOfBirth, birthMonth, birthDay, ageAtEvent, birthdayNearEvent ±7 days)
+        ...birthdayFields(order.customerDob, event?.date),
+
         // Order & money
         orderNumber: order.orderNumber,
         orderId: toId(order),
@@ -105,6 +109,9 @@ export const sendGHLTicketPurchasedEvent = async (
         ticketLinks: list.map(ticketUrl).join(" | "),
         primaryTicketUrl: list[0] ? ticketUrl(list[0]) : "",
         myTicketsUrl: `${site}/user/tickets/`,
+        // Extra seats: buyer shares this link; guests claim with phone OTP, buyer accepts/rejects
+        shareUrl: order.shareToken ? `${site}/tickets/share/${order.shareToken}/` : "",
+        extraSeats: Math.max(0, ticketCount - 1),
 
         // Event
         eventId: toId(event),

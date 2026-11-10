@@ -20,6 +20,16 @@ export interface ITicket extends Document {
   checkedInBy?: Types.ObjectId;
   checkedInByName?: string;
   notes?: string;
+  // Guest sharing: who actually holds (and enters with) this seat.
+  // Legacy tickets have no holderStatus and behave as held by the buyer.
+  isBuyerSeat?: boolean;
+  holderStatus?: "unassigned" | "pending" | "accepted";
+  holderUser?: Types.ObjectId;
+  holderName?: string;
+  holderPhone?: string;
+  holderEmail?: string;
+  requestedAt?: Date;
+  acceptedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -48,7 +58,15 @@ const ticketSchema = new Schema<ITicket>(
     checkedInAt: { type: Date },
     checkedInBy: { type: Schema.Types.ObjectId, ref: "User" },
     checkedInByName: { type: String, trim: true },
-    notes: { type: String, trim: true }
+    notes: { type: String, trim: true },
+    isBuyerSeat: { type: Boolean, default: false },
+    holderStatus: { type: String, enum: ["unassigned", "pending", "accepted"], index: true },
+    holderUser: { type: Schema.Types.ObjectId, ref: "User", index: true },
+    holderName: { type: String, trim: true, maxlength: 100 },
+    holderPhone: { type: String, trim: true, index: true },
+    holderEmail: { type: String, trim: true, lowercase: true },
+    requestedAt: { type: Date },
+    acceptedAt: { type: Date }
   },
   { timestamps: true }
 );

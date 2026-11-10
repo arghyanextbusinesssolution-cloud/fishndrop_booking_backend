@@ -1,4 +1,5 @@
 import { getBookingFrontendUrl, getReviewUrl, GHLWebhookKey, VENUE_NAME } from "../config";
+import { birthdayFields } from "../../../utils/dob.utils";
 import { employeeFields, getEmployeeContacts } from "../helpers/team";
 import type { DispatchOptions } from "../client";
 import type { GHLPayloadOptions, NormalizedStatus } from "../types";
@@ -164,6 +165,9 @@ export const buildBookingPayload = (booking: any, options: GHLPayloadOptions) =>
     email,
     customerPhone: phone,
     phone,
+
+    // ── Birthday bonus (dateOfBirth, birthMonth, birthDay, ageAtEvent, birthdayNearEvent ±7 days)
+    ...birthdayFields(booking.customerDob, booking.bookingDate),
 
     // ── Standardized status
     status: normalizedStatus,

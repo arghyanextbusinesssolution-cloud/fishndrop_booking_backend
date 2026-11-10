@@ -10,6 +10,7 @@ export interface IUser extends Document {
   otpCode?: string;
   otpExpires?: Date;
   isPhoneVerified?: boolean;
+  dateOfBirth?: string; // "YYYY-MM-DD" (calendar date, no timezone) — birthday bonus
   // Promoter specific fields
   companyName?: string;
   idDocumentUrl?: string;
@@ -37,6 +38,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     otpCode: { type: String, select: false },
     otpExpires: { type: Date, select: false },
     isPhoneVerified: { type: Boolean, default: false },
+    dateOfBirth: { type: String, trim: true, match: /^\d{4}-\d{2}-\d{2}$/ },
     // Promoter verification and Stripe Connect
     companyName: { type: String, trim: true, maxlength: 150 },
     idDocumentUrl: { type: String, trim: true },

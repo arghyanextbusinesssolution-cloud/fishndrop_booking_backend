@@ -16,6 +16,7 @@ export interface ITicketOrder extends Document {
   customerName: string;
   customerEmail: string;
   customerPhone: string;
+  customerDob?: string; // "YYYY-MM-DD" snapshot at purchase (birthday bonus)
   items: IOrderItem[];
   subtotal: number;
   platformFee: number;
@@ -24,7 +25,10 @@ export interface ITicketOrder extends Document {
   currency: string;
   status: "pending" | "paid" | "failed" | "cancelled" | "refunded";
   qrMode?: "individual" | "group"; // buyer's choice after payment
-  groupQrToken?: string; // one QR that admits every ticket in this order
+  groupQrToken?: string; // legacy: one QR that admitted every ticket in the order
+  shareToken?: string; // one link the buyer shares so guests can claim the extra seats
+  guestCancelDeadline?: Date; // accepted guests may cancel until paidAt + 48h
+  rejectedPhones?: string[]; // guests the buyer declined; they can't re-request
   stripeCheckoutSessionId?: string;
   stripePaymentIntentId?: string;
   stripeConnectAccountId?: string;
@@ -58,6 +62,7 @@ const ticketOrderSchema = new Schema<ITicketOrder>(
     customerName: { type: String, required: true, trim: true, maxlength: 100 },
     customerEmail: { type: String, required: true, trim: true, lowercase: true, index: true },
     customerPhone: { type: String, required: true, trim: true },
+    customerDob: { type: String, trim: true },
     items: [orderItemSchema],
     subtotal: { type: Number, required: true, min: 0 },
     platformFee: { type: Number, required: true, min: 0, default: 0 },
@@ -72,6 +77,9 @@ const ticketOrderSchema = new Schema<ITicketOrder>(
     },
     qrMode: { type: String, enum: ["individual", "group"] },
     groupQrToken: { type: String, unique: true, sparse: true },
+    shareToken: { type: String, unique: true, sparse: true },
+    guestCancelDeadline: { type: Date },
+    rejectedPhones: { type: [String], default: [] },
     stripeCheckoutSessionId: { type: String, index: true },
     stripePaymentIntentId: { type: String },
     stripeConnectAccountId: { type: String },

@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import { isValidDob } from "../utils/dob.utils";
 import jwt from "jsonwebtoken";
 import mongoose from "mongoose";
 import User from "../models/User";
@@ -289,6 +290,11 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
     const name = sanitizeString(req.body.name);
     const email = sanitizeString(req.body.email).toLowerCase();
     const phone = sanitizeString(req.body.phone);
+    const dobInput = sanitizeString(req.body.dateOfBirth);
+    if (dobInput && !isValidDob(dobInput)) {
+      res.status(400).json({ success: false, message: "Please enter a valid date of birth" });
+      return;
+    }
 
     const user = await User.findById(req.user._id);
     if (!user) {
@@ -315,6 +321,7 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
     if (name) user.name = name;
     if (email) user.email = email;
     if (phone) user.phone = phone;
+    if (dobInput) user.dateOfBirth = dobInput;
     if (req.body.companyName) user.companyName = sanitizeString(req.body.companyName);
     let newIdDocument = false;
     if (req.body.idDocumentUrl) {
@@ -353,6 +360,7 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
         idDocumentUrl: user.idDocumentUrl,
         promoterStatus: user.promoterStatus,
         isPhoneVerified: user.isPhoneVerified,
+        dateOfBirth: user.dateOfBirth,
         createdAt: (user as any).createdAt
       }
     });
