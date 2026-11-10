@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import Booking from "../../models/Booking";
 import SlotLock from "../../models/SlotLock";
 import { sanitizeString } from "../../utils/time.utils";
-import { sendGHLCancelEvent } from "../../utils/ghl.utils";
+import { sendGHLCancelEvent } from "../../integrations/ghl";
 
 export const cancelBooking = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {

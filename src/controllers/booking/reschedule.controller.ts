@@ -3,7 +3,7 @@ import Booking from "../../models/Booking";
 import SlotLock from "../../models/SlotLock";
 import Table from "../../models/Table";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
-import { sendGHLRescheduleEvent, calculateEventTimes } from "../../utils/ghl.utils";
+import { sendGHLRescheduleEvent, calculateEventTimes } from "../../integrations/ghl";
 import logger from "../../config/logger";
 import * as BookingService from "../../services/booking";
 

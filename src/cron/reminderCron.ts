@@ -1,6 +1,8 @@
 import cron from "node-cron";
 import Booking from "../models/Booking";
 import SlotLock from "../models/SlotLock";
+import TicketOrder from "../models/TicketOrder";
+import Event from "../models/Event";
 import logger from "../config/logger";
 import {
     sendRemainingBalanceReminderViaEmailJS,
@@ -17,6 +19,47 @@ export const startReminderCron = () => {
             await cleanupExpiredPendingBookings();
         } catch (err) {
             logger.error("[Auto-Cleanup Cron Error]", err);
+        }
+    });
+
+
+    // Cleanup expired pending ticket orders every 3 minutes
+    cron.schedule("*/3 * * * *", async () => {
+        try {
+            const expiredOrders = await TicketOrder.find({
+                status: "pending",
+                expiresAt: { $lt: new Date() }
+            });
+
+            const { releaseOrderReservation, fulfillTicketOrder } = await import("../controllers/ticketPurchase.controller");
+            const { getStripe } = await import("../utils/stripe.utils");
+            const stripe = getStripe();
+
+            for (const order of expiredOrders) {
+                try {
+                    // Embedded payments: make sure the PaymentIntent can't be paid after we free the seats
+                    if (stripe && order.stripePaymentIntentId && !order.stripeCheckoutSessionId) {
+                        const intent = await stripe.paymentIntents.retrieve(order.stripePaymentIntentId);
+                        if (intent.status === "succeeded") {
+                            await fulfillTicketOrder(order._id.toString(), intent.id);
+                            continue;
+                        }
+                        if (intent.status === "processing") continue; // decide when it settles
+                        if (intent.status !== "canceled") {
+                            await stripe.paymentIntents.cancel(intent.id).catch(() => undefined);
+                        }
+                    }
+                    await releaseOrderReservation(order._id.toString(), "failed");
+                } catch (orderErr: any) {
+                    logger.error(`[Ticket Cleanup] Failed for order ${order.orderNumber}`, { error: orderErr.message });
+                }
+            }
+
+            if (expiredOrders.length > 0) {
+                logger.info(`[Ticket Cleanup] Cleaned up ${expiredOrders.length} expired ticket orders`);
+            }
+        } catch (err) {
+            logger.error("[Ticket Cleanup Cron Error]", err);
         }
     });
 

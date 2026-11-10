@@ -5,7 +5,7 @@ import Table from "../../models/Table";
 import assignTables from "../../utils/tableAssigner";
 import { isOverlapping, buildDayRange, TIME_SLOTS } from "../../utils/time.utils";
 import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
-import { calculateEventTimes } from "../../utils/ghl.utils";
+import { calculateEventTimes } from "../../integrations/ghl";
 
 export interface BookingPayload {
   userId: mongoose.Types.ObjectId;

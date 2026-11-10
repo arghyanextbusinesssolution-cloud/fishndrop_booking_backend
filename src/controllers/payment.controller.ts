@@ -5,11 +5,24 @@ import Stripe from "stripe";
 import { loadEnvFiles } from "../config/loadEnv";
 import mongoose from "mongoose";
 import Booking from "../models/Booking";
+
+/**
+ * The browser check and the Stripe webhook can both confirm the same deposit at the same moment.
+ * Only the first one to claim it sends the confirmation emails + GHL booking_confirmed.
+ */
+const claimFirstConfirmation = async (bookingId: any): Promise<boolean> => {
+  const r = await Booking.updateOne(
+    { _id: bookingId, ghlConfirmedSentAt: { $exists: false } },
+    { $set: { ghlConfirmedSentAt: new Date() } }
+  );
+  return r.modifiedCount === 1;
+};
 import Coupon from "../models/Coupon";
 import logger from "../config/logger";
 import { v2 as cloudinary } from "cloudinary";
 import { sendPaymentEmails, sendRemainingBalanceReminderViaEmailJS, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
-import { sendGHLBookingEvent, sendGHLZellePendingEvent, sendGHLZelleConfirmedEvent } from "../utils/ghl.utils";
+import { sendGHLBookingEvent, sendGHLZellePendingEvent, sendGHLZelleConfirmedEvent } from "../integrations/ghl";
+import { getPrivateEventAvailability, createSlotLocksForPrivateEvent } from "../services/booking/private.service";
 
 // Configure Cloudinary explicitly
 cloudinary.config({
@@ -554,8 +567,10 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
 
         await booking.save();
         logger.info(`Booking ${bookingId} – deposit marked as paid. Remaining: $${booking.remainingAmount}`);
-        void sendPaymentEmails(booking);
-        void sendGHLBookingEvent(booking);
+        if (await claimFirstConfirmation(booking._id)) {
+          void sendPaymentEmails(booking);
+          void sendGHLBookingEvent(booking);
+        }
       } else {
         // Idempotency: skip coupon increment if already paid.
         logger.info(`Booking ${bookingId} already marked as paid.`);
@@ -700,8 +715,10 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
 
         await booking.save();
         logger.info(`PaymentIntent Verification: Booking ${bookingId} deposit marked as paid.`);
-        void sendPaymentEmails(booking);
-        void sendGHLBookingEvent(booking);
+        if (await claimFirstConfirmation(booking._id)) {
+          void sendPaymentEmails(booking);
+          void sendGHLBookingEvent(booking);
+        }
       }
 
       if (booking.remainingAmount > 0) {
@@ -830,8 +847,10 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
 
               await booking.save();
               logger.info(`Webhook: Booking ${bookingId} deposit marked as paid.`);
-              void sendPaymentEmails(booking);
-              void sendGHLBookingEvent(booking);
+              if (await claimFirstConfirmation(booking._id)) {
+                void sendPaymentEmails(booking);
+                void sendGHLBookingEvent(booking);
+              }
 
               if (booking.remainingAmount > 0) {
                 const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
@@ -849,6 +868,90 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
         } catch (dbErr: any) {
           logger.error(`Webhook: Failed to update booking ${bookingId}.`, { error: dbErr.message });
         }
+      }
+
+      if (session.metadata?.type === "event_ticket" && session.metadata?.orderId) {
+        try {
+          const { fulfillTicketOrder } = await import("./ticketPurchase.controller");
+          const orderId = session.metadata.orderId;
+          const txnId = session.payment_intent ? String(session.payment_intent) : session.id;
+          await fulfillTicketOrder(orderId, txnId);
+          logger.info(`Webhook: Ticket order ${orderId} successfully fulfilled.`);
+        } catch (ticketErr: any) {
+          logger.error(`Webhook: Failed to fulfill ticket order: ${ticketErr.message}`);
+        }
+      }
+      break;
+    }
+    case "payment_intent.succeeded": {
+      // Embedded ticket checkout (PaymentElement). Safety net if the buyer closes the tab
+      // before the success page runs — fulfilment is idempotent.
+      const intent = event.data.object as any;
+      if (intent.metadata?.type === "event_ticket" && intent.metadata?.orderId) {
+        try {
+          const { fulfillTicketOrder } = await import("./ticketPurchase.controller");
+          await fulfillTicketOrder(intent.metadata.orderId, intent.id);
+          logger.info(`Webhook: Ticket order ${intent.metadata.orderId} fulfilled from payment_intent.succeeded`);
+        } catch (ticketErr: any) {
+          logger.error(`Webhook: Failed to fulfill ticket order: ${ticketErr.message}`);
+        }
+      }
+      break;
+    }
+    case "payment_intent.canceled": {
+      const intent = event.data.object as any;
+      if (intent.metadata?.type === "event_ticket" && intent.metadata?.orderId) {
+        try {
+          const { releaseOrderReservation } = await import("./ticketPurchase.controller");
+          await releaseOrderReservation(intent.metadata.orderId, "cancelled");
+        } catch (err: any) {
+          logger.warn(`Webhook: Failed to release ticket hold: ${err.message}`);
+        }
+      }
+      break;
+    }
+    case "checkout.session.expired": {
+      const session = event.data.object as any;
+      if (session.metadata?.type === "event_ticket" && session.metadata?.orderId) {
+        try {
+          const TicketOrder = (await import("../models/TicketOrder")).default;
+          const Event = (await import("../models/Event")).default;
+          const order = await TicketOrder.findById(session.metadata.orderId);
+          if (order && order.status === "pending") {
+            order.status = "failed";
+            await order.save();
+            for (const item of order.items) {
+              await Event.updateOne(
+                { _id: order.event, "ticketTiers._id": item.tierId },
+                { $inc: { "ticketTiers.$.reserved": -item.quantity } }
+              );
+            }
+            logger.info(`Webhook: Released reserved inventory for expired order ${order.orderNumber}`);
+          }
+        } catch (err: any) {
+          logger.warn(`Failed to release expired order inventory: ${err.message}`);
+        }
+      }
+      break;
+    }
+    case "account.updated": {
+      const account = event.data.object as any;
+      try {
+        const User = (await import("../models/User")).default;
+        await User.updateOne(
+          { stripeConnectAccountId: account.id },
+          {
+            $set: {
+              // Same rule as /connect/status: promoter can receive destination-charge funds
+              chargesEnabled: Boolean(account.charges_enabled && account.capabilities?.transfers === "active"),
+              payoutsEnabled: account.payouts_enabled,
+              stripeConnectOnboarded: account.details_submitted
+            }
+          }
+        );
+        logger.info(`Webhook: Synced Stripe Connect status for account ${account.id}`);
+      } catch (err: any) {
+        logger.warn(`Failed to sync account update: ${err.message}`);
       }
       break;
     }
@@ -881,6 +984,15 @@ export const uploadZelleProof = async (req: Request, res: Response, next: NextFu
 
     const isFoodPayment = req.body.isFood === true || req.body.isFood === "true";
     const isBalancePayment = !isFoodPayment && (isBalance === true || isBalance === "true");
+
+    if (!isFoodPayment && !isBalancePayment && booking.status === "cancelled") {
+      res.status(410).json({
+        success: false,
+        code: "HOLD_EXPIRED",
+        message: "Your 15-minute slot hold expired before the screenshot was submitted. Please choose your time again."
+      });
+      return;
+    }
     const folderName = isFoodPayment
       ? "fishndrop_zelle_food_proofs"
       : isBalancePayment
@@ -978,13 +1090,14 @@ export const uploadZelleProof = async (req: Request, res: Response, next: NextFu
 
     await booking.save();
 
+    // Only now (screenshot uploaded + submitted) does the booking go to GHL
     void sendGHLZellePendingEvent(booking);
 
     res.status(200).json({
       success: true,
       message: isBalancePayment
         ? "Remaining balance Zelle proof uploaded. Pending GHL balance verification."
-        : "Zelle deposit proof uploaded. Pending GHL email verification.",
+        : "Zelle deposit proof uploaded. We verify it within 15 minutes, otherwise the slot is released.",
       zelleProofUrl: isBalancePayment ? result.secure_url : booking.zelleProofUrl,
       isBalance: isBalancePayment,
       booking
@@ -1190,6 +1303,41 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
     // When GHL fires this webhook, it means GHL verified the payment — trust it regardless of amount.
     // The receivedAmount will be saved as the actual payment so the booking shows real amount.
     const isStatusValid = ghlStatus !== "failed" && ghlStatus !== "mismatched" && ghlStatus !== "rejected";
+
+    // GHL verified AFTER the 15-minute window released this booking: only re-confirm if the slot is still free
+    if (isStatusValid && !isBalancePayment && booking.status === "cancelled") {
+      let reclaimed = false;
+      if (booking.bookingType === "private_event" && booking.bookingDate && booking.bookingTime) {
+        try {
+          const day = new Date(booking.bookingDate).toISOString().slice(0, 10);
+          const { slots } = await getPrivateEventAvailability(day, booking.durationHours || 5);
+          if (slots.some((s: any) => s.slot === booking!.bookingTime && s.isAvailable)) {
+            await createSlotLocksForPrivateEvent(booking._id, booking.bookingDate, booking.bookingTime, booking.durationHours || 5);
+            reclaimed = true;
+          }
+        } catch (err: any) {
+          logger.error("[GHL Zelle Webhook] Could not re-check slot for late verification", { error: err.message });
+        }
+      }
+      if (!reclaimed) {
+        booking.zelleVerificationStatus = "manual_review";
+        booking.zelleTransactionId = transactionId;
+        booking.zelleNotes =
+          `PAID AFTER HOLD EXPIRED: GHL verified $${receivedAmount.toFixed(2)} but the slot was already released and is no longer free. ` +
+          `Refund or rebook the customer.`;
+        await booking.save();
+        logger.warn(`[GHL Zelle Webhook] LATE verification for ${booking._id}: slot taken → manual review (refund/rebook).`);
+        res.status(200).json({
+          success: false,
+          status: "late_payment_slot_taken",
+          message: "Payment verified after the 15-minute hold expired and the slot is taken. Flagged for refund or rebooking.",
+          booking
+        });
+        return;
+      }
+      booking.zelleReleasedAt = undefined;
+      logger.info(`[GHL Zelle Webhook] LATE verification for ${booking._id}: slot still free → re-locked and confirming.`);
+    }
 
     if (isStatusValid) {
       booking.zelleTransactionId = transactionId;

@@ -4,10 +4,47 @@ import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
 import DailyTableLock from "../models/DailyTableLock";
 import User from "../models/User";
+import OtpCode from "../models/OtpCode";
+import { clearEmployeeContactsCache } from "../integrations/ghl/helpers/team";
+
+const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Permanently remove these accounts AND every duplicate account of the same person
+ * (same phone in any format, or same email), plus their pending login codes.
+ * Admin/owner accounts are never removed as duplicates. Bookings / orders are kept as business records.
+ */
+const purgeAccounts = async (ids: string[], protectId?: string): Promise<number> => {
+  const targets = await User.find({ _id: { $in: ids } }).select("phone email role").lean();
+  if (targets.length === 0) return 0;
+
+  const or: any[] = [];
+  const otpPhones: string[] = [];
+  for (const t of targets as any[]) {
+    const digits = String(t.phone || "").replace(/\D/g, "");
+    if (digits.length >= 7) {
+      const last10 = digits.slice(-10);
+      or.push({ phone: { $regex: `${escapeRx(last10)}$` } });
+      otpPhones.push(last10);
+    }
+    if (t.email) or.push({ email: String(t.email).toLowerCase() });
+  }
+
+  const duplicates = or.length
+    ? await User.find({ $or: or, _id: { $nin: ids }, role: { $nin: ["admin", "owner"] } }).select("_id").lean()
+    : [];
+  const allIds = [...new Set([...ids, ...duplicates.map((d: any) => String(d._id))])].filter((id) => id !== protectId);
+
+  const result = await User.deleteMany({ _id: { $in: allIds } });
+  if (otpPhones.length) {
+    await OtpCode.deleteMany({ $or: otpPhones.map((p) => ({ phone: { $regex: `${escapeRx(p)}$` } })) }).catch(() => undefined);
+  }
+  return result.deletedCount || 0;
+};
 import assignTables from "../utils/tableAssigner";
 import { buildDayRange, isOverlapping, TIME_SLOTS } from "../utils/time.utils";
 import { sendPaymentEmails, sendFullPaymentConfirmationViaEmailJS } from "../utils/email.utils";
-import { sendGHLBookingEvent } from "../utils/ghl.utils";
+import { sendGHLBookingEvent, sendGHLEmployeeCreatedEvent } from "../integrations/ghl";
 import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
 import { sendQuoteViaGHL } from "../services/ghlQuote.service";
 import { createSlotLocksForPrivateEvent } from "../services/booking/private.service";
@@ -1148,6 +1185,9 @@ export const getAllUsers = async (req: Request, res: Response, next: NextFunctio
     if (role && role !== "all") {
       query.role = role;
     }
+    if (sanitizeString(req.query.incomplete) === "true") {
+      query.$and = [...(query.$and || []), { $or: [{ name: { $exists: false } }, { name: "" }, { name: "Guest User" }] }];
+    }
     if (verified && verified !== "all") {
       query.isPhoneVerified = verified === "true";
     }
@@ -1224,7 +1264,7 @@ export const getAllUsers = async (req: Request, res: Response, next: NextFunctio
  */
 export const deleteUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const targetId = req.params.id;
+    const targetId = String(req.params.id);
     if (req.user?._id?.toString() === targetId) {
       res.status(400).json({ success: false, message: "You cannot delete your own active account" });
       return;
@@ -1236,11 +1276,20 @@ export const deleteUser = async (req: Request, res: Response, next: NextFunction
       return;
     }
 
-    await User.findByIdAndDelete(targetId);
+    if (["admin", "owner"].includes(user.role) && req.user?.role !== "owner") {
+      res.status(403).json({ success: false, message: "Only the owner can delete admin accounts" });
+      return;
+    }
+
+    const deletedCount = await purgeAccounts([targetId], req.user?._id?.toString());
 
     res.status(200).json({
       success: true,
-      message: `User ${user.name || user.phone} deleted successfully`
+      deletedCount,
+      message:
+        deletedCount > 1
+          ? `${user.name || user.phone} deleted, including ${deletedCount - 1} duplicate account(s) with the same phone/email`
+          : `User ${user.name || user.phone} deleted successfully`
     });
   } catch (error: any) {
     console.error("[Delete User Error]:", error);
@@ -1268,15 +1317,344 @@ export const deleteBulkUsers = async (req: Request, res: Response, next: NextFun
       return;
     }
 
-    const result = await User.deleteMany({ _id: { $in: filteredIds } });
+    // Admin/owner accounts can't be bulk-deleted from here
+    const deletable = (await User.find({ _id: { $in: filteredIds }, role: { $nin: ["admin", "owner"] } }).select("_id").lean()).map(
+      (u: any) => String(u._id)
+    );
+    const deletedCount = await purgeAccounts(deletable, currentUserId);
+    const skipped = filteredIds.length - deletable.length;
 
     res.status(200).json({
       success: true,
-      message: `Successfully deleted ${result.deletedCount} user(s)`,
-      deletedCount: result.deletedCount
+      message: `Deleted ${deletedCount} account(s)${skipped ? ` · ${skipped} admin account(s) skipped` : ""}`,
+      deletedCount
     });
   } catch (error: any) {
     console.error("[Bulk Delete Users Error]:", error);
     next(new Error(`Failed to bulk delete users: ${error.message}`));
+  }
+};
+
+
+/**
+ * GET /api/admin/promoters
+ * List promoters, optionally filtered by status
+ */
+export const getPromoters = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const status = sanitizeString(req.query.status);
+    const query: any = { role: "promoter" };
+    if (status && ["pending", "approved", "rejected"].includes(status)) {
+      query.promoterStatus = status;
+    }
+
+    const promoters = await User.find(query)
+      .select("-password -otpCode -otpExpires")
+      .populate("promoterApprovedBy", "name email")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: promoters.length, promoters });
+  } catch (error: any) {
+    next(new Error(`Failed to fetch promoters: ${error.message}`));
+  }
+};
+
+/**
+ * PATCH /api/admin/promoters/:id/verify
+ * Approve or reject a promoter application
+ */
+export const verifyPromoter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const action = sanitizeString(req.body.action); // "approved" | "rejected"
+    const notes = sanitizeString(req.body.notes);
+    const platformFeeOverride = req.body.platformFeeOverride !== undefined ? Number(req.body.platformFeeOverride) : undefined;
+
+    if (!["approved", "rejected"].includes(action)) {
+      res.status(400).json({ success: false, message: "Action must be 'approved' or 'rejected'" });
+      return;
+    }
+
+    const promoter = await User.findById(id);
+    if (!promoter) {
+      res.status(404).json({ success: false, message: "Promoter not found" });
+      return;
+    }
+
+    promoter.promoterStatus = action as "approved" | "rejected";
+    if (action === "approved") {
+      promoter.promoterApprovedBy = req.user?._id;
+      promoter.promoterApprovedAt = new Date();
+      promoter.promoterRejectionReason = undefined;
+      if (platformFeeOverride !== undefined && !isNaN(platformFeeOverride) && platformFeeOverride >= 0) {
+        promoter.platformFeeOverride = platformFeeOverride;
+      }
+    } else {
+      promoter.promoterRejectionReason = notes || "Application does not meet platform requirements at this time";
+    }
+
+    await promoter.save();
+
+    // Dispatch details to promoter verification webhook
+    const { sendGHLPromoterVerificationEvent } = await import("../integrations/ghl");
+    void sendGHLPromoterVerificationEvent(
+      promoter,
+      action as "approved" | "rejected",
+      req.user ? {
+        id: req.user._id?.toString(),
+        name: req.user.name,
+        email: req.user.email,
+        role: req.user.role
+      } : undefined,
+      notes
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Promoter application has been ${action}`,
+      promoter: {
+        id: promoter._id,
+        name: promoter.name,
+        email: promoter.email,
+        companyName: promoter.companyName,
+        promoterStatus: promoter.promoterStatus,
+        platformFeeOverride: promoter.platformFeeOverride
+      }
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to update promoter verification: ${error.message}`));
+  }
+};
+
+/**
+ * GET /api/admin/employees
+ * Retrieve all staff / employee accounts
+ */
+export const getEmployees = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const employees = await User.find({ role: "staff" })
+      .select("-password -otpCode -otpExpires")
+      .sort({ createdAt: -1 });
+
+    res.status(200).json({ success: true, count: employees.length, employees });
+  } catch (error: any) {
+    next(new Error(`Failed to fetch employees: ${error.message}`));
+  }
+};
+
+/**
+ * POST /api/admin/employees
+ * Create a new employee/staff account and email credentials
+ */
+export const createEmployee = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const name = sanitizeString(req.body.name);
+    const email = sanitizeString(req.body.email).toLowerCase();
+    const password = sanitizeString(req.body.password);
+    const phone = sanitizeString(req.body.phone);
+
+    if (!name || !email || !password) {
+      res.status(400).json({ success: false, message: "Name, email, and password are required" });
+      return;
+    }
+
+    if (password.length < 6) {
+      res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+      return;
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email }, ...(phone ? [{ phone }] : [])] });
+    if (existingUser) {
+      res.status(400).json({ success: false, message: "An account with this email or phone already exists" });
+      return;
+    }
+
+    const employee = await User.create({
+      name,
+      email,
+      password,
+      phone: phone || undefined,
+      role: "staff",
+      isPhoneVerified: true
+    });
+
+    // Send credentials via email
+    const { sendEmployeeCredentialsEmail } = await import("../utils/email.utils");
+    void sendEmployeeCredentialsEmail({
+      employeeName: name,
+      employeeEmail: email,
+      temporaryPassword: password,
+      loginUrl: `${process.env.FRONTEND_BASE_URL || "http://localhost:3000"}/employee-login`
+    });
+
+    // Push the new employee account to GoHighLevel (fire-and-forget; never blocks the response)
+    clearEmployeeContactsCache();
+    void sendGHLEmployeeCreatedEvent(employee, req.user, { password });
+
+    res.status(201).json({
+      success: true,
+      message: `Employee account created for ${name}. Credentials have been emailed.`,
+      employee: {
+        id: employee._id,
+        name: employee.name,
+        email: employee.email,
+        phone: employee.phone,
+        role: employee.role,
+        createdAt: (employee as any).createdAt
+      }
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to create employee: ${error.message}`));
+  }
+};
+
+/**
+ * DELETE /api/admin/employees/:id
+ * Delete a staff / employee account
+ */
+export const deleteEmployee = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const employee = await User.findOne({ _id: id, role: "staff" });
+    if (!employee) {
+      res.status(404).json({ success: false, message: "Employee account not found" });
+      return;
+    }
+
+    const deletedCount = await purgeAccounts([String(employee._id)], req.user?._id?.toString());
+    clearEmployeeContactsCache();
+    res.status(200).json({
+      success: true,
+      deletedCount,
+      message:
+        deletedCount > 1
+          ? `Employee deleted, including ${deletedCount - 1} other account(s) with the same phone/email`
+          : "Employee account deleted successfully"
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to delete employee: ${error.message}`));
+  }
+};
+
+/**
+ * DELETE /api/admin/promoters/:id
+ * Delete a promoter account / application
+ */
+export const deletePromoter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const promoter = await User.findOne({ _id: id, role: "promoter" });
+    if (!promoter) {
+      res.status(404).json({ success: false, message: "Promoter application not found" });
+      return;
+    }
+    await User.findByIdAndDelete(id);
+    res.status(200).json({ success: true, message: "Promoter application deleted successfully" });
+  } catch (error: any) {
+    next(new Error(`Failed to delete promoter: ${error.message}`));
+  }
+};
+
+/**
+ * GET /api/admin/settings/pricing
+ * Retrieve current platform fee, venue pricing, and add-on rates
+ */
+export const getSystemSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const SystemSettings = (await import("../models/SystemSettings")).default;
+    const settings = await (SystemSettings as any).getSettings();
+    res.status(200).json({ success: true, settings });
+  } catch (error: any) {
+    next(new Error(`Failed to fetch system settings: ${error.message}`));
+  }
+};
+
+/**
+ * PATCH /api/admin/settings/pricing
+ * Update system pricing, fee percentages, and log audit entry
+ */
+export const updateSystemSettings = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const SystemSettings = (await import("../models/SystemSettings")).default;
+    const settings = await (SystemSettings as any).getSettings();
+
+    const previousSnapshot: Record<string, any> = {
+      platformFeePercent: settings.platformFeePercent,
+      platformFixedFee: settings.platformFixedFee,
+      feeMode: settings.feeMode,
+      perGuestPrice: settings.perGuestPrice,
+      maxGuestCapacity: settings.maxGuestCapacity,
+      djPrice: settings.djPrice,
+      photographerBasePrice: settings.photographerBasePrice,
+      photographerExtraHourPrice: settings.photographerExtraHourPrice,
+      extraHourPrice: settings.extraHourPrice
+    };
+
+    const changes: Record<string, { previous: any; current: any }> = {};
+
+    const updateField = (key: string, val: any, validator?: (v: any) => boolean) => {
+      if (val !== undefined && (validator ? validator(val) : true)) {
+        if (settings[key] !== val) {
+          changes[key] = { previous: settings[key], current: val };
+          settings[key] = val;
+        }
+      }
+    };
+
+    if (req.body.platformFeePercent !== undefined) {
+      const num = Number(req.body.platformFeePercent);
+      updateField("platformFeePercent", num, (n) => !isNaN(n) && n >= 0 && n <= 100);
+    }
+    if (req.body.platformFixedFee !== undefined) {
+      const num = Number(req.body.platformFixedFee);
+      updateField("platformFixedFee", num, (n) => !isNaN(n) && n >= 0);
+    }
+    if (req.body.feeMode && ["customer_paid", "promoter_paid"].includes(req.body.feeMode)) {
+      updateField("feeMode", req.body.feeMode);
+    }
+    if (req.body.perGuestPrice !== undefined) {
+      const num = Number(req.body.perGuestPrice);
+      updateField("perGuestPrice", num, (n) => !isNaN(n) && n >= 1);
+    }
+    if (req.body.maxGuestCapacity !== undefined) {
+      const num = Number(req.body.maxGuestCapacity);
+      updateField("maxGuestCapacity", num, (n) => !isNaN(n) && n >= 1);
+    }
+    if (req.body.djPrice !== undefined) {
+      const num = Number(req.body.djPrice);
+      updateField("djPrice", num, (n) => !isNaN(n) && n >= 0);
+    }
+    if (req.body.photographerBasePrice !== undefined) {
+      const num = Number(req.body.photographerBasePrice);
+      updateField("photographerBasePrice", num, (n) => !isNaN(n) && n >= 0);
+    }
+    if (req.body.photographerExtraHourPrice !== undefined) {
+      const num = Number(req.body.photographerExtraHourPrice);
+      updateField("photographerExtraHourPrice", num, (n) => !isNaN(n) && n >= 0);
+    }
+    if (req.body.extraHourPrice !== undefined) {
+      const num = Number(req.body.extraHourPrice);
+      updateField("extraHourPrice", num, (n) => !isNaN(n) && n >= 0);
+    }
+
+    if (Object.keys(changes).length > 0) {
+      settings.auditHistory.push({
+        modifiedBy: req.user?._id || "admin",
+        modifiedByName: req.user?.name || "Andrew",
+        modifiedAt: new Date(),
+        changes,
+        notes: sanitizeString(req.body.notes) || "Pricing and platform fees updated via Admin Dashboard"
+      });
+      await settings.save();
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "System pricing and fees updated successfully",
+      settings,
+      changesMade: Object.keys(changes).length
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to update system settings: ${error.message}`));
   }
 };

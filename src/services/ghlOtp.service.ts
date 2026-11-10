@@ -7,27 +7,36 @@ export interface GHLOtpRequest {
 }
 
 /**
- * Converts a phone number to standard international E.164 format (+1XXXXXXXXXX)
+ * Converts a phone number to standard international E.164 format (+1XXXXXXXXXX, +91XXXXXXXXXX)
+ * Preserves explicit international prefixes for US, Canada, India, and worldwide numbers.
  */
 export const formatToE164 = (phone: string): string => {
-  const clean = phone.replace(/[^\d+]/g, "");
-  const digits = clean.replace(/\D/g, "");
+  if (!phone) return "";
+  const clean = phone.trim().replace(/[^\d+]/g, "");
 
-  // If standard 10 digits (US/Canada), format as +1XXXXXXXXXX
-  if (digits.length === 10) {
-    return `+1${digits}`;
+  // If it already starts with an explicit '+', preserve the international E.164 format
+  if (clean.startsWith("+")) {
+    return clean;
   }
 
-  // If 11 digits starting with 1, format as +1XXXXXXXXXX
+  const digits = clean.replace(/\D/g, "");
+
+  // If 11 digits starting with 1 (US/Canada with country code)
   if (digits.length === 11 && digits.startsWith("1")) {
     return `+${digits}`;
   }
 
-  if (!clean.startsWith("+")) {
-    return `+${clean}`;
+  // If 12 digits starting with 91 (India with country code)
+  if (digits.length === 12 && digits.startsWith("91")) {
+    return `+${digits}`;
   }
 
-  return clean;
+  // If 10 digits without '+' prefix, default to North America (+1)
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+
+  return `+${digits}`;
 };
 
 /**

@@ -355,3 +355,87 @@ export const sendFullPaymentConfirmationViaEmailJS = async (booking: IBooking): 
   }
 };
 
+/**
+ * Send account login credentials to a newly created employee/staff member.
+ */
+export const sendEmployeeCredentialsEmail = async (params: {
+  employeeName: string;
+  employeeEmail: string;
+  temporaryPassword: string;
+  loginUrl?: string;
+}): Promise<boolean> => {
+  const { employeeName, employeeEmail, temporaryPassword, loginUrl } = params;
+  const targetLoginUrl = loginUrl || `${process.env.FRONTEND_BASE_URL || "http://localhost:3000"}/employee-login`;
+
+  console.log(`\n======================================================`);
+  console.log(`📨 [EMPLOYEE ACCOUNT CREATED] Credentials Generated:`);
+  console.log(`👤 Name: ${employeeName}`);
+  console.log(`📧 Email: ${employeeEmail}`);
+  console.log(`🔑 Password: ${temporaryPassword}`);
+  console.log(`🔗 Login Portal: ${targetLoginUrl}`);
+  console.log(`======================================================\n`);
+
+  try {
+    if (!process.env.GMAIL_NAME || !process.env.GMAIL_PASSWORD) {
+      console.warn("⚠️ [EMAIL] GMAIL credentials not set in .env. Email not sent via SMTP, credentials logged above.");
+      return false;
+    }
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Tropica Staff Account Credentials</title>
+      </head>
+      <body style="margin: 0; padding: 0; background-color: #070B09; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #ffffff;">
+        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 40px auto; background-color: #0d1612; border-radius: 16px; border: 1px solid rgba(200,169,106,0.3); overflow: hidden;">
+          <tr>
+            <td style="padding: 40px 32px; text-align: center; background: linear-gradient(180deg, #0a2e21 0%, #0d1612 100%);">
+              <h1 style="color: #C8A96A; margin: 0 0 8px 0; font-size: 26px; font-weight: 700; letter-spacing: 2px;">TROPICA NYC</h1>
+              <p style="color: rgba(255,255,255,0.7); font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; margin: 0;">Staff & Employee Portal</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 32px 32px;">
+              <h2 style="color: #ffffff; font-size: 20px; margin: 0 0 16px 0;">Welcome, ${employeeName}!</h2>
+              <p style="color: rgba(255,255,255,0.8); font-size: 14px; line-height: 22px; margin: 0 0 24px 0;">
+                Your Tropica staff account has been created by management. You now have access to verify promoter applications, check event ticketing, and manage guest check-ins.
+              </p>
+              
+              <div style="background-color: rgba(200,169,106,0.08); border: 1px solid rgba(200,169,106,0.3); border-radius: 12px; padding: 20px; margin-bottom: 28px;">
+                <p style="margin: 0 0 10px 0; font-size: 12px; text-transform: uppercase; color: #C8A96A; font-weight: bold; letter-spacing: 1px;">Your Login Credentials</p>
+                <p style="margin: 4px 0; font-size: 14px; color: #ffffff;"><strong>Portal:</strong> <a href="${targetLoginUrl}" style="color: #E8CB8A;">${targetLoginUrl}</a></p>
+                <p style="margin: 4px 0; font-size: 14px; color: #ffffff;"><strong>Email:</strong> ${employeeEmail}</p>
+                <p style="margin: 4px 0; font-size: 14px; color: #ffffff;"><strong>Temporary Password:</strong> <code style="background: rgba(0,0,0,0.5); padding: 3px 8px; border-radius: 4px; font-size: 15px; color: #E8CB8A;">${temporaryPassword}</code></p>
+              </div>
+
+              <div style="text-align: center; margin-bottom: 24px;">
+                <a href="${targetLoginUrl}" style="display: inline-block; background: #C8A96A; color: #070B09; text-decoration: none; font-weight: bold; font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px; padding: 14px 32px; border-radius: 50px;">Log In to Staff Dashboard</a>
+              </div>
+
+              <p style="color: rgba(255,255,255,0.5); font-size: 12px; line-height: 18px; margin: 0; text-align: center;">
+                For security reasons, we recommend changing your password after your first login.
+              </p>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: `"Tropica Concierge" <${SENDER_EMAIL}>`,
+      to: employeeEmail,
+      subject: "Your Tropica Employee Account Credentials",
+      html: htmlContent
+    });
+
+    console.log(`✅ [EMAIL] Employee credentials successfully emailed to ${employeeEmail}`);
+    return true;
+  } catch (error: any) {
+    console.error(`❌ [EMAIL] Failed to send credentials email to ${employeeEmail}:`, error.message);
+    return false;
+  }
+};
+

@@ -1,6 +1,16 @@
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { login, register, getMe, checkEmail, sendOTP, verifyOTP, updateProfile, getSmsQuota } from "../controllers/auth.controller";
+import {
+  login,
+  register,
+  registerPromoter,
+  getMe,
+  checkEmail,
+  sendOTP,
+  verifyOTP,
+  updateProfile,
+  getSmsQuota
+} from "../controllers/auth.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
 const authLimiter = rateLimit({
@@ -20,6 +30,8 @@ router.post("/verify-otp", verifyOTP);
 router.post("/update-profile", authMiddleware, updateProfile);
 router.post("/check-email", checkEmail);
 router.post("/register", register);
+// Requires the phone-OTP session from the sign-up flow
+router.post("/register-promoter", authMiddleware, registerPromoter);
 router.post("/login", login);
 router.get("/me", authMiddleware, getMe);
 

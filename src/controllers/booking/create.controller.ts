@@ -5,7 +5,7 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
-import { sendGHLLeadEvent, sendGHLZellePendingEvent } from "../../utils/ghl.utils";
+import { sendGHLLeadEvent, sendGHLZellePendingEvent } from "../../integrations/ghl";
 
 export const validateCoupon = async (req: Request, res: Response): Promise<void> => {
   try {

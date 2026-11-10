@@ -1,3 +1,5 @@
+import crypto from "crypto";
+import SystemSettings from "../../models/SystemSettings";
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import User from "../../models/User";
@@ -7,11 +9,15 @@ import { sendPaymentEmails } from "../../utils/email.utils";
 import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
-import { sendGHLLeadEvent, sendGHLZellePendingEvent, calculateEventTimes } from "../../utils/ghl.utils";
+import { sendGHLLeadEvent, sendGHLZellePendingEvent, calculateEventTimes } from "../../integrations/ghl";
+
+import { employeeFields, getEmployeeContacts } from "../../integrations/ghl/helpers/team";
 
 const LEAD_CONNECTOR_WEBHOOK_URL =
   process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
   "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723";
+
+export const MIN_PRIVATE_GUESTS = 8;
 
 const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>) => {
   if (!LEAD_CONNECTOR_WEBHOOK_URL) return;
@@ -21,6 +27,7 @@ const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        ...employeeFields(await getEmployeeContacts().catch(() => [])),
         source: "private_booking",
         bookingId: booking._id?.toString?.() || booking.id,
         bookingType: booking.bookingType,
@@ -38,11 +45,22 @@ export const getPrivateAvailability = async (req: Request, res: Response, next: 
   try {
     const date = sanitizeString(req.query.date);
     const duration = Number(req.query.duration) || 1;
+    const settings = await SystemSettings.getSettings();
     const { slots, totalCapacity } = await BookingService.getPrivateEventAvailability(date, duration);
 
     res.status(200).json({
       success: true,
-      totalCapacity,
+      totalCapacity: settings.maxGuestCapacity || totalCapacity,
+      perGuestPrice: settings.perGuestPrice,
+      settings: {
+        perGuestPrice: settings.perGuestPrice,
+        maxGuestCapacity: settings.maxGuestCapacity,
+        extraHourPrice: settings.extraHourPrice,
+        djPrice: settings.djPrice,
+        photographerBasePrice: settings.photographerBasePrice,
+        photographerExtraHourPrice: settings.photographerExtraHourPrice,
+        minDepositAmount: settings.minDepositAmount
+      },
       slots
     });
   } catch (error) {
@@ -67,6 +85,22 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const needPhotographer = Boolean(req.body.needPhotographer);
     const photographerHours = Math.max(2, Number(req.body.photographerHours) || 2);
     const cateringMenu = sanitizeString(req.body.cateringMenu);
+
+    const settings = await SystemSettings.getSettings();
+    if (!Number.isFinite(partySize) || partySize < MIN_PRIVATE_GUESTS) {
+      res.status(400).json({
+        success: false,
+        message: `Private venue bookings start at ${MIN_PRIVATE_GUESTS} guests`
+      });
+      return;
+    }
+    if (partySize > settings.maxGuestCapacity) {
+      res.status(400).json({
+        success: false,
+        message: `Guest count (${partySize}) exceeds maximum capacity of ${settings.maxGuestCapacity} guests`
+      });
+      return;
+    }
 
     let authenticatedUser = null;
     const authHeader = req.headers.authorization;
@@ -117,10 +151,12 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const djCost = needDj ? 300 : 0;
-    const extraHoursCost = durationHours > 5 ? (durationHours - 5) * 125 : 0;
-    const photographerCost = needPhotographer ? 300 + Math.max(0, photographerHours - 2) * 150 : 0;
-    const totalAmount = 500 + extraHoursCost + djCost + photographerCost;
+    const perGuestRate = settings.perGuestPrice || 35;
+    const baseCost = partySize * perGuestRate;
+    const djCost = needDj ? (settings.djPrice ?? 300) : 0;
+    const extraHoursCost = durationHours > 5 ? (durationHours - 5) * (settings.extraHourPrice ?? 125) : 0;
+    const photographerCost = needPhotographer ? (settings.photographerBasePrice ?? 300) + Math.max(0, photographerHours - 2) * (settings.photographerExtraHourPrice ?? 150) : 0;
+    const totalAmount = baseCost + extraHoursCost + djCost + photographerCost;
     let currentAmount = totalAmount;
     let couponUsed, couponCode, promoterName, discountApplied = 0;
 
@@ -136,8 +172,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     }
 
     // Deposit = $200 to secure date and time
-    let minDeposit = Math.min(currentAmount, 200);
-    let depositAmount = Math.min(currentAmount, 200);
+    let minDeposit = Math.min(currentAmount, settings.minDepositAmount ?? 200);
+    let depositAmount = Math.min(currentAmount, settings.minDepositAmount ?? 200);
     if (req.body.customDepositAmount) {
       const custom = Number(req.body.customDepositAmount);
       if (!isNaN(custom) && custom >= minDeposit && custom <= currentAmount) {
@@ -164,7 +200,11 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const fbp = sanitizeString(req.body.fbp);
     const referralUrl = sanitizeString(req.body.referralUrl || req.body.landingPage);
 
+    const invitationToken = crypto.randomBytes(16).toString("hex");
+
     const booking = await Booking.create({
+      invitationToken,
+      requireHostApproval: Boolean(req.body.requireHostApproval),
       user: user!._id,
       tables: allTables.map(t => t._id),
       partySize,
@@ -198,7 +238,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       finalAmount: currentAmount,
       paymentMethod: isZelle ? "zelle" : "card",
       zelleProofUrl: zelleProofUrl || "",
-      zelleVerificationStatus: isZelle ? "pending_ghl_verification" : "none",
+      // Zelle without a screenshot is only a 15-minute draft hold (auto-released by cleanup)
+      zelleVerificationStatus: isZelle && zelleProofUrl ? "pending_ghl_verification" : "none",
       zelleUploadedAt: isZelle && zelleProofUrl ? new Date() : undefined,
       utmSource,
       utmMedium,
@@ -223,51 +264,13 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
 
-    if (isZelle) {
+    // Zelle: nothing goes to GHL until the customer uploads the screenshot and submits
+    // (see uploadZelleProof). Card: unchanged.
+    if (isZelle && zelleProofUrl) {
       void sendGHLZellePendingEvent(booking);
-    } else {
+    } else if (!isZelle) {
       void sendGHLLeadEvent(booking);
     }
-
-    await sendPrivateBookingLead(booking, {
-      name,
-      email,
-      phone,
-      bookingDate,
-      bookingTime,
-      partySize,
-      durationHours,
-      occasion,
-      needDj,
-      cateringMenu,
-      notes,
-      depositAmount,
-      totalAmount: currentAmount,
-      remainingAmount,
-      customDepositAmount: req.body.customDepositAmount ? Number(req.body.customDepositAmount) : depositAmount,
-      couponApplied: Boolean(couponCode),
-      couponCode: couponCode || "",
-      couponDiscountAmount: discountApplied,
-      couponDetails: couponCode
-        ? { code: couponCode, discountAmount: discountApplied, promoterName: promoterName || "" }
-        : null,
-      bookingDetails: {
-        occasion,
-        needDj,
-        cateringMenu,
-        notes,
-        partySize,
-        durationHours,
-        bookingDate,
-        bookingTime,
-        depositAmount,
-        totalAmount: currentAmount,
-        remainingAmount,
-        customDepositAmount: req.body.customDepositAmount ? Number(req.body.customDepositAmount) : depositAmount,
-      },
-      accountCreated,
-      userId: user!._id?.toString?.() || user!._id
-    });
 
     const token = jwt.sign({ id: user!._id }, process.env.JWT_SECRET as string, { algorithm: "HS256", expiresIn: "7d" });
 
@@ -401,3 +404,35 @@ export const respondToQuote = async (req: Request, res: Response, next: NextFunc
 };
 
 
+
+/** Lead webhook built from a saved booking: used when a Zelle screenshot is submitted. */
+export const sendPrivateBookingLeadFromBooking = async (booking: any) => {
+  const day = booking.bookingDate ? new Date(booking.bookingDate).toISOString().slice(0, 10) : "";
+  const details = {
+    occasion: booking.occasion,
+    needDj: booking.needDj,
+    cateringMenu: booking.cateringMenu,
+    notes: booking.notes,
+    partySize: booking.partySize,
+    durationHours: booking.durationHours,
+    bookingDate: day,
+    bookingTime: booking.bookingTime,
+    depositAmount: booking.depositAmount,
+    totalAmount: booking.totalAmount,
+    remainingAmount: booking.remainingAmount,
+    customDepositAmount: booking.depositAmount
+  };
+  await sendPrivateBookingLead(booking, {
+    name: booking.customerName,
+    email: booking.customerEmail,
+    phone: booking.customerPhone,
+    ...details,
+    paymentMethod: "zelle",
+    zelleProofUrl: booking.zelleProofUrl,
+    couponApplied: Boolean(booking.couponCode),
+    couponCode: booking.couponCode || "",
+    couponDiscountAmount: booking.discountApplied || 0,
+    bookingDetails: details,
+    userId: String(booking.user || "")
+  });
+};

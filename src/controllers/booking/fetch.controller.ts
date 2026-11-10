@@ -1,3 +1,4 @@
+import SystemSettings from "../../models/SystemSettings";
 import { NextFunction, Request, Response } from "express";
 import Booking from "../../models/Booking";
 import Table from "../../models/Table";
@@ -132,9 +133,21 @@ export const getPublicBookingStatus = async (req: Request, res: Response, next: 
 
 export const getVenueCapacity = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
+    const settings = await SystemSettings.getSettings();
     const allTables = await Table.find();
-    const totalCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);
-    res.status(200).json({ success: true, totalCapacity });
+    const tablesCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);
+    const totalCapacity = settings.maxGuestCapacity || tablesCapacity;
+    res.status(200).json({
+      success: true,
+      totalCapacity,
+      maxGuestCapacity: totalCapacity,
+      perGuestPrice: settings.perGuestPrice,
+      extraHourPrice: settings.extraHourPrice,
+      djPrice: settings.djPrice,
+      photographerBasePrice: settings.photographerBasePrice,
+      photographerExtraHourPrice: settings.photographerExtraHourPrice,
+      minDepositAmount: settings.minDepositAmount
+    });
   } catch (error) {
     next(new Error("Failed to fetch venue capacity"));
   }

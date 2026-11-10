@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from "express";
 import { v2 as cloudinary } from "cloudinary";
 import Booking from "../../models/Booking";
 import { sanitizeString } from "../../utils/time.utils";
-import { sendGHLMediaUploadEvent } from "../../utils/ghl.utils";
+import { sendGHLMediaUploadEvent } from "../../integrations/ghl";
 import logger from "../../config/logger";
 
 cloudinary.config({

@@ -5,6 +5,28 @@ import User from "../models/User";
 import OtpCode from "../models/OtpCode";
 import { sendOtpViaGHL, formatToE164 } from "../services/ghlOtp.service";
 import { checkSmsQuota, recordSmsDispatch, getSmsQuotaStatus, clearPhoneSmsAttempts } from "../services/smsLimit.service";
+import { sendGHLPromoterRegisteredEvent } from "../integrations/ghl";
+import { v2 as cloudinary } from "cloudinary";
+
+const MAX_ID_DOC_BYTES = 10 * 1024 * 1024;
+
+/**
+ * Promoter ID documents are stored on Cloudinary; only the https link is saved and sent to GHL.
+ * Returns "" when nothing was provided. Throws if an uploaded file can't be stored.
+ */
+const storeIdDocument = async (raw: unknown): Promise<string> => {
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return "";
+  if (/^https:\/\//i.test(value)) return value.slice(0, 1000);
+  const m = value.match(/^data:(image\/(?:png|jpe?g|webp|heic|heif)|application\/pdf);base64,/i);
+  if (!m) throw new Error("Unsupported ID document format");
+  if (Math.floor((value.length - m[0].length) * 0.75) > MAX_ID_DOC_BYTES) throw new Error("ID document is larger than 10MB");
+  const result = await cloudinary.uploader.upload(value, {
+    folder: "tropica_promoter_ids",
+    resource_type: "auto"
+  });
+  return result.secure_url;
+};
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -68,17 +90,11 @@ export const sendOTP = async (req: Request, res: Response, next: NextFunction): 
       { upsert: true, returnDocument: "after" }
     );
 
-    // Also update/upsert user record
-    await User.findOneAndUpdate(
+    // Keep the code on an EXISTING account only. Accounts are created after successful
+    // verification (verifyOTP), so requesting a code never leaves an empty "unnamed" user behind.
+    await User.updateOne(
       { phone: rawPhone },
-      {
-        $set: {
-          otpCode,
-          otpExpires: otpExpires
-        },
-        $setOnInsert: { isPhoneVerified: false }
-      },
-      { upsert: true, returnDocument: "after" }
+      { $set: { otpCode, otpExpires: otpExpires } }
     ).catch((err) => {
       console.warn("User record sync note:", err.message);
     });
@@ -252,6 +268,8 @@ export const verifyOTP = async (req: Request, res: Response, next: NextFunction)
         email: user.email || "",
         phone: user.phone,
         role: user.role,
+        companyName: user.companyName,
+        promoterStatus: user.promoterStatus,
         isPhoneVerified: true
       }
     });
@@ -278,21 +296,62 @@ export const updateProfile = async (req: Request, res: Response, next: NextFunct
       return;
     }
 
+    if (email && email !== user.email) {
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        res.status(400).json({ success: false, message: "Please enter a valid email address" });
+        return;
+      }
+      const taken = await User.exists({ email, _id: { $ne: user._id } });
+      if (taken) {
+        res.status(409).json({
+          success: false,
+          code: "EMAIL_IN_USE",
+          message: "This email is already linked to another account. Please use a different email."
+        });
+        return;
+      }
+    }
+
     if (name) user.name = name;
     if (email) user.email = email;
     if (phone) user.phone = phone;
+    if (req.body.companyName) user.companyName = sanitizeString(req.body.companyName);
+    let newIdDocument = false;
+    if (req.body.idDocumentUrl) {
+      try {
+        const url = await storeIdDocument(req.body.idDocumentUrl);
+        if (url && url !== user.idDocumentUrl) {
+          user.idDocumentUrl = url;
+          newIdDocument = true;
+        }
+      } catch (err: any) {
+        res.status(400).json({ success: false, message: `Could not upload the ID document: ${err.message}` });
+        return;
+      }
+    }
+
+    // A promoter goes back to "pending" only when they submit a NEW ID document for re-verification.
+    // (The "promoter_registered" GHL webhook is sent on sign-up only.)
+    if (user.role === "promoter" && newIdDocument) {
+      user.promoterStatus = "pending";
+    }
 
     await user.save();
 
     res.status(200).json({
       success: true,
-      message: "Profile updated successfully",
+      message: user.role === "promoter" && newIdDocument
+        ? "Our employee will verify your data and then we will notify you."
+        : "Profile updated successfully",
       user: {
         id: user._id,
         name: user.name || "",
         email: user.email || "",
         phone: user.phone,
         role: user.role,
+        companyName: user.companyName,
+        idDocumentUrl: user.idDocumentUrl,
+        promoterStatus: user.promoterStatus,
         isPhoneVerified: user.isPhoneVerified,
         createdAt: (user as any).createdAt
       }
@@ -315,7 +374,7 @@ export const register = async (req: Request, res: Response, next: NextFunction):
     }
 
     if (email) {
-      const existingUser = await User.findOne({ email });
+      const existingUser = await User.findOne({ $or: [{ email }, ...(phone ? [{ phone }] : [])] });
       if (existingUser) {
         res.status(400).json({ success: false, message: "An account with this email address already exists. Please log in instead." });
         return;
@@ -349,7 +408,7 @@ export const register = async (req: Request, res: Response, next: NextFunction):
       success: true, 
       message: "User registered successfully", 
       token,
-      user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role }
+      user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, companyName: user.companyName, promoterStatus: user.promoterStatus, isPhoneVerified: user.isPhoneVerified }
     });
   } catch (error: any) {
     next(new Error(`Registration failed: ${error.message}`));
@@ -381,7 +440,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       res.status(200).json({
         success: true,
         token,
-        user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role }
+        user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, companyName: user.companyName, promoterStatus: user.promoterStatus, isPhoneVerified: user.isPhoneVerified }
       });
       return;
     }
@@ -400,7 +459,7 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       res.status(200).json({
         success: true,
         token,
-        user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role }
+        user: { id: user._id, name: user.name, email: user.email, phone: user.phone, role: user.role, companyName: user.companyName, promoterStatus: user.promoterStatus, isPhoneVerified: user.isPhoneVerified }
       });
       return;
     }
@@ -430,5 +489,117 @@ export const checkEmail = async (req: Request, res: Response, next: NextFunction
     res.status(200).json({ success: true, exists: !!user });
   } catch (error) {
     next(new Error("Failed to check email"));
+  }
+};
+
+
+export const registerPromoter = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    // The sign-up flow verifies the phone by OTP first, which signs the person in.
+    // We upgrade THAT account, never one looked up by email (that allowed account takeover).
+    if (!req.user) {
+      res.status(401).json({ success: false, code: "PHONE_VERIFICATION_REQUIRED", message: "Please verify your phone number first" });
+      return;
+    }
+
+    const name = sanitizeString(req.body.name);
+    const email = sanitizeString(req.body.email).toLowerCase();
+    const companyName = sanitizeString(req.body.companyName);
+
+    if (!name || name.length < 2) {
+      res.status(400).json({ success: false, message: "Please enter your full name" });
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ success: false, message: "Please enter a valid email address" });
+      return;
+    }
+
+    const user = await User.findById(req.user._id);
+    if (!user) {
+      res.status(401).json({ success: false, message: "Your session has expired. Please verify your phone again." });
+      return;
+    }
+    if (!user.phone || !user.isPhoneVerified) {
+      res.status(403).json({ success: false, code: "PHONE_VERIFICATION_REQUIRED", message: "Please verify your phone number first" });
+      return;
+    }
+    if (["admin", "owner", "staff"].includes(user.role)) {
+      res.status(400).json({
+        success: false,
+        message: "This phone number belongs to a Tropica staff account and can't be registered as a promoter."
+      });
+      return;
+    }
+    if (user.role === "promoter") {
+      res.status(400).json({
+        success: false,
+        code: "ALREADY_PROMOTER",
+        message: "You already have a promoter account. Please log in."
+      });
+      return;
+    }
+
+    const emailOwner = await User.findOne({ email, _id: { $ne: user._id } }).select("_id").lean();
+    if (emailOwner) {
+      res.status(409).json({
+        success: false,
+        code: "EMAIL_IN_USE",
+        message: "This email is already used by another account. Please use a different email."
+      });
+      return;
+    }
+
+    let idDocumentUrl = "";
+    try {
+      idDocumentUrl = await storeIdDocument(req.body.idDocumentUrl);
+    } catch (err: any) {
+      res.status(400).json({
+        success: false,
+        code: "ID_UPLOAD_FAILED",
+        message: `We couldn't upload your ID document (${err.message}). Please choose the photo again and resubmit.`
+      });
+      return;
+    }
+
+    const isNew = !user.name || user.name === "Guest User";
+    user.name = name;
+    user.email = email;
+    user.role = "promoter";
+    user.promoterStatus = "pending";
+    if (companyName) user.companyName = companyName;
+    if (idDocumentUrl) user.idDocumentUrl = idDocumentUrl;
+    await user.save();
+
+    console.log(`\n📝 [PROMOTER APPLICATION] ${name} <${email}> ${user.phone} | ${companyName || "Independent"} | ID: ${idDocumentUrl ? "uploaded" : "none"}\n`);
+    void sendGHLPromoterRegisteredEvent(user);
+
+    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {
+      algorithm: "HS256",
+      expiresIn: "7d"
+    });
+
+    res.status(isNew ? 201 : 200).json({
+      success: true,
+      message: "Promoter application submitted successfully. Pending staff verification.",
+      token,
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        phone: user.phone,
+        role: user.role,
+        companyName: user.companyName,
+        promoterStatus: user.promoterStatus,
+        isPhoneVerified: true,
+        stripeConnectOnboarded: user.stripeConnectOnboarded || false
+      }
+    });
+  } catch (error: any) {
+    if (error?.code === 11000) {
+      res.status(409).json({ success: false, message: "This email or phone is already used by another account." });
+      return;
+    }
+    next(new Error(`Promoter registration failed: ${error.message}`));
   }
 };

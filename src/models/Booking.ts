@@ -95,6 +95,8 @@ export interface IBooking extends Document {
   zelleTransactionId?: string;
   zelleNotes?: string;
   zelleUploadedAt?: Date;
+  zelleReleasedAt?: Date; // slot released because GHL did not verify in time
+  ghlConfirmedSentAt?: Date; // booking_confirmed already sent to GHL (prevents double sends)
 
   // Owner Financial Tracking & Profitability
   contractedAmount?: number;
@@ -158,6 +160,8 @@ export interface IBooking extends Document {
   fbc?: string;
   fbp?: string;
   referralUrl?: string;
+  invitationToken?: string;
+  requireHostApproval?: boolean;
 
   createdAt?: Date;
   updatedAt?: Date;
@@ -326,6 +330,8 @@ const bookingSchema = new Schema<IBooking>(
       type: String,
       default: ""
     },
+    zelleReleasedAt: { type: Date },
+    ghlConfirmedSentAt: { type: Date },
     zelleUploadedAt: {
       type: Date
     },
@@ -405,7 +411,9 @@ const bookingSchema = new Schema<IBooking>(
     fbclid: { type: String },
     fbc: { type: String },
     fbp: { type: String },
-    referralUrl: { type: String }
+    referralUrl: { type: String },
+    invitationToken: { type: String, unique: true, sparse: true, index: true },
+    requireHostApproval: { type: Boolean, default: false }
   },
   { timestamps: true }
 );
