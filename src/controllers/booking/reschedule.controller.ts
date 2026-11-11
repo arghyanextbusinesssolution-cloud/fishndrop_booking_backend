@@ -44,8 +44,9 @@ export const rescheduleBooking = async (req: Request, res: Response, next: NextF
 
     // If private event, verify availability and adjust slot locks
     if (booking.bookingType === "private_event") {
-      const { slots } = await BookingService.getPrivateEventAvailability(newDate, duration);
-      const isSlotAvailable = slots.some((s: any) => s.time === newTime && s.available);
+      // Exclude this booking's own record/locks so moving within an overlapping window isn't blocked by itself
+      const { slots } = await BookingService.getPrivateEventAvailability(newDate, duration, booking._id.toString());
+      const isSlotAvailable = slots.some((s: any) => s.slot === newTime && s.isAvailable);
       
       // If admin, we allow override if desired, but check for warning
       if (!isSlotAvailable && !isAdmin) {

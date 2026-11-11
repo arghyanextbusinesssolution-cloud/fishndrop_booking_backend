@@ -9,7 +9,8 @@ import {
   adminApproveEvent,
   getAllEventsForAdmin,
   getEventBookings,
-  getPromoterBookings
+  getPromoterBookings,
+  getVenueAvailability
 } from "../controllers/event.controller";
 import authMiddleware from "../middleware/auth.middleware";
 import adminOnly, { staffOrAdminOnly } from "../middleware/admin.middleware";
@@ -25,6 +26,7 @@ router.get("/slug/:slug", getEventBySlug);
 router.use(authMiddleware);
 router.post("/", promoterOnly, createEvent);
 router.get("/my-events", promoterOnly, getMyEvents);
+router.get("/venue-availability", promoterOnly, getVenueAvailability);
 router.get("/promoter/dashboard-stats", promoterOnly, getPromoterDashboardStats);
 router.get("/promoter/bookings", promoterOnly, getPromoterBookings);
 router.patch("/:id/publish-request", promoterOnly, requestEventApproval);

@@ -164,6 +164,10 @@ export interface IBooking extends Document {
   invitationToken?: string;
   requireHostApproval?: boolean;
 
+  // Google Calendar sync (private venue bookings only)
+  googleSyncStatus?: "synced" | "removed" | "failed";
+  googleSyncedAt?: Date;
+
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -415,13 +419,50 @@ const bookingSchema = new Schema<IBooking>(
     fbp: { type: String },
     referralUrl: { type: String },
     invitationToken: { type: String, unique: true, sparse: true, index: true },
-    requireHostApproval: { type: Boolean, default: false }
+    requireHostApproval: { type: Boolean, default: false },
+    googleSyncStatus: { type: String, enum: ["synced", "removed", "failed"] },
+    googleSyncedAt: { type: Date }
   },
   { timestamps: true }
 );
 
 bookingSchema.index({ user: 1 });
 bookingSchema.index({ bookingDate: 1 });
+
+// ── Google Calendar: push private venue bookings whenever their calendar-relevant fields change
+const CALENDAR_FIELDS = [
+  "status", "bookingDate", "bookingTime", "durationHours", "partySize", "customerName",
+  "customerPhone", "customerEmail", "occasion", "paymentStatus", "needDj", "needPhotographer", "notes"
+];
+bookingSchema.pre("save", function () {
+  this.$locals.calendarDirty = this.bookingType === "private_event" && (this.isNew || this.isModified(CALENDAR_FIELDS));
+});
+bookingSchema.post("save", function (doc) {
+  if (!doc.$locals.calendarDirty) return;
+  // Lazy require: the sync service imports this model
+  const { syncBookingToCalendar } = require("../services/calendarSync.service");
+  void syncBookingToCalendar(doc);
+});
+
+// ── Google Calendar: any hard delete (single, bulk, by id) removes the calendar entry too
+const CALENDAR_SYNCED = { bookingType: "private_event", googleSyncStatus: { $in: ["synced", "failed"] } };
+const removeFromCalendar = (ids: string[]) => {
+  if (!ids.length) return;
+  const { removeDeletedFromCalendar } = require("../services/calendarSync.service");
+  void removeDeletedFromCalendar("booking", ids);
+};
+bookingSchema.pre(["deleteOne", "deleteMany", "findOneAndDelete"], { document: false, query: true }, async function () {
+  const ids = await this.model.find({ $and: [this.getFilter(), CALENDAR_SYNCED] }).distinct("_id");
+  (this as any)._calendarIds = ids.map(String);
+});
+bookingSchema.post(["deleteOne", "deleteMany", "findOneAndDelete"], { document: false, query: true }, function () {
+  removeFromCalendar((this as any)._calendarIds || []);
+});
+bookingSchema.post("deleteOne", { document: true, query: false }, function (doc) {
+  if (doc.bookingType === "private_event" && doc.googleSyncStatus && doc.googleSyncStatus !== "removed") {
+    removeFromCalendar([doc._id.toString()]);
+  }
+});
 
 const Booking = model<IBooking>("Booking", bookingSchema);
 export default Booking;

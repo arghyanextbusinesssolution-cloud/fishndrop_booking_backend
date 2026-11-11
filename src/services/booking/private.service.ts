@@ -1,68 +1,60 @@
-import Booking from "../../models/Booking";
 import SlotLock from "../../models/SlotLock";
 import Table from "../../models/Table";
 import { isOverlapping, buildDayRange, timeToMinutes, TIME_SLOTS } from "../../utils/time.utils";
 import { cleanupExpiredPendingBookings } from "../../utils/cleanupExpiredBookings";
+import { getSessionBusyBlocks, overlapsAny } from "../venueAvailability.service";
 
-export const getPrivateEventAvailability = async (date: string, duration: number) => {
+/** "YYYY-MM-DD" for any date input buildDayRange accepts. */
+const toYmd = (date: string) => buildDayRange(date).parsedDate.toISOString().slice(0, 10);
+
+/** True when the requested venue window [startTime, startTime + durationHours) is free for a private buyout. */
+export const isPrivateSlotAvailable = async (
+  date: string,
+  startTime: string,
+  durationHours: number,
+  excludeBookingId?: string
+): Promise<boolean> => {
+  const { slots } = await getPrivateEventAvailability(date, durationHours, excludeBookingId);
+  return slots.some((s) => s.slot === startTime && s.isAvailable);
+};
+
+/**
+ * Hourly start times for a private venue buyout on `date`. A start is available only when the whole
+ * window is clear of: other buyouts, table reservations, admin locks, Tropica promoter events and
+ * entries added by hand to the venue's Google Calendar (see venueAvailability.service).
+ */
+export const getPrivateEventAvailability = async (date: string, duration: number, excludeBookingId?: string) => {
   await cleanupExpiredPendingBookings();
-  const { dayStart, dayEnd } = buildDayRange(date);
 
-  const [allTables, slotLocks, bookingsForDay] = await Promise.all([
+  const [allTables, blocks] = await Promise.all([
     Table.find(),
-    SlotLock.find({ bookingDate: { $gte: dayStart, $lte: dayEnd }, isLocked: true }),
-    Booking.find({ bookingDate: { $gte: dayStart, $lte: dayEnd }, status: { $in: ["confirmed", "pending"] } })
+    getSessionBusyBlocks(toYmd(date), { excludeBookingId })
   ]);
 
   const totalCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);
 
-  const HOURLY_SLOTS = [];
+  const HOURLY_SLOTS: string[] = [];
   for (let i = 10; i <= 23; i++) {
     HOURLY_SLOTS.push(`${i < 10 ? "0" : ""}${i}:00`);
   }
 
-  const isSlotOccupied = (slotTime: string) => {
-    const hasStandardBooking = bookingsForDay.some(b => {
-      if (b.bookingType === "private_event") return false;
-      return isOverlapping(b.bookingTime, 120, slotTime, 60);
-    });
-    if (hasStandardBooking) return true;
-
-    const hasPrivateEvent = bookingsForDay.some(b => {
-      if (b.bookingType !== "private_event") return false;
-      const pDurationMins = (b.durationHours || 1) * 60;
-      return isOverlapping(b.bookingTime, pDurationMins, slotTime, 60);
-    });
-    if (hasPrivateEvent) return true;
-
-    return slotLocks.some(lock => lock.bookingTime === slotTime);
-  };
-
-  const slots = HOURLY_SLOTS.map(timeSlot => {
-    let blockAvailable = true;
+  const slots = HOURLY_SLOTS.map((timeSlot) => {
     const startMins = timeToMinutes(timeSlot);
     const endMins = startMins + duration * 60;
 
-    // Allow blocks that end by 3 AM next day (3*60 + 24*60 = 1620 mins in our model)
-    if (endMins > 27 * 60) {
-      blockAvailable = false;
-    } else {
-      for (let m = startMins; m < endMins; m += 60) {
-        // Convert back to HH:MM, wrapping midnight (e.g. 1500 mins → 01:00)
-        const rawHour = Math.floor(m / 60);
-        const hour = rawHour >= 24 ? rawHour - 24 : rawHour;
-        const checkTime = `${hour < 10 ? "0" : ""}${hour}:00`;
-        if (isSlotOccupied(checkTime)) {
-          blockAvailable = false;
-          break;
-        }
-      }
-    }
+    // Blocks must end by 3 AM next day (3*60 + 24*60 = 1620 mins in our model)
+    const tooLate = endMins > 27 * 60;
+    const conflict = tooLate ? undefined : overlapsAny(blocks, startMins, endMins);
+    const isAvailable = !tooLate && !conflict;
 
     return {
       slot: timeSlot,
-      isAvailable: blockAvailable,
-      message: blockAvailable ? "Available" : "Venue partially or fully booked"
+      isAvailable,
+      message: isAvailable
+        ? "Available"
+        : conflict?.source === "promoter_event"
+          ? "Reserved for a venue event"
+          : "Venue partially or fully booked"
     };
   });
 

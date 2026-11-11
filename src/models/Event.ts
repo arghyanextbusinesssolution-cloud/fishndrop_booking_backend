@@ -34,6 +34,8 @@ export interface IEvent extends Document {
   feeOverridePercent?: number;
   fixedFeeOverride?: number;
   feeModeOverride?: "customer_paid" | "promoter_paid";
+  googleSyncStatus?: "synced" | "removed" | "failed";
+  googleSyncedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -79,10 +81,43 @@ const eventSchema = new Schema<IEvent>(
     rejectionReason: { type: String, trim: true, maxlength: 500 },
     feeOverridePercent: { type: Number, min: 0, max: 100 },
     fixedFeeOverride: { type: Number, min: 0 },
-    feeModeOverride: { type: String, enum: ["customer_paid", "promoter_paid"] }
+    feeModeOverride: { type: String, enum: ["customer_paid", "promoter_paid"] },
+    googleSyncStatus: { type: String, enum: ["synced", "removed", "failed"] },
+    googleSyncedAt: { type: Date }
   },
   { timestamps: true }
 );
+
+// ── Google Calendar: Tropica events hold the venue (tentative until approved)
+const CALENDAR_FIELDS = ["status", "venueType", "title", "date", "startTime", "endTime"];
+eventSchema.pre("save", function () {
+  this.$locals.calendarDirty = this.isNew || this.isModified(CALENDAR_FIELDS);
+});
+eventSchema.post("save", function (doc) {
+  if (!doc.$locals.calendarDirty) return;
+  // External events are only touched if they were previously synced (e.g. venue switched away)
+  if (doc.venueType !== "tropica" && doc.googleSyncStatus !== "synced") return;
+  const { syncEventToCalendar } = require("../services/calendarSync.service");
+  void syncEventToCalendar(doc);
+});
+
+// ── Google Calendar: any hard delete (single, bulk, by id) removes the calendar entry too
+const CALENDAR_SYNCED = { googleSyncStatus: { $in: ["synced", "failed"] } };
+const removeFromCalendar = (ids: string[]) => {
+  if (!ids.length) return;
+  const { removeDeletedFromCalendar } = require("../services/calendarSync.service");
+  void removeDeletedFromCalendar("event", ids);
+};
+eventSchema.pre(["deleteOne", "deleteMany", "findOneAndDelete"], { document: false, query: true }, async function () {
+  const ids = await this.model.find({ $and: [this.getFilter(), CALENDAR_SYNCED] }).distinct("_id");
+  (this as any)._calendarIds = ids.map(String);
+});
+eventSchema.post(["deleteOne", "deleteMany", "findOneAndDelete"], { document: false, query: true }, function () {
+  removeFromCalendar((this as any)._calendarIds || []);
+});
+eventSchema.post("deleteOne", { document: true, query: false }, function (doc) {
+  if (doc.googleSyncStatus && doc.googleSyncStatus !== "removed") removeFromCalendar([doc._id.toString()]);
+});
 
 export const generateEventSlug = (title: string, dateStr?: string): string => {
   const base = title

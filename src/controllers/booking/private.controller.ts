@@ -105,6 +105,20 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       return;
     }
 
+    // Server-side check: the UI hides taken slots, but the venue may have been taken
+    // (another buyout, an admin lock, or a promoter event at Tropica) since the page loaded.
+    if (!bookingDate || !bookingTime) {
+      res.status(400).json({ success: false, message: "Please choose a date and start time" });
+      return;
+    }
+    if (!(await BookingService.isPrivateSlotAvailable(bookingDate, bookingTime, durationHours))) {
+      res.status(409).json({
+        success: false,
+        message: "Sorry, that date and time is no longer available for a private venue booking. Please pick another slot."
+      });
+      return;
+    }
+
     let authenticatedUser = null;
     const authHeader = req.headers.authorization;
     if (authHeader && authHeader.startsWith("Bearer ")) {

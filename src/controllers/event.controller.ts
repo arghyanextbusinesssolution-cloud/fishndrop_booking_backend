@@ -10,6 +10,12 @@ import SystemSettings from "../models/SystemSettings";
 import { sendGHLEventApprovedEvent, sendGHLPromoterEventCreatedEvent } from "../integrations/ghl";
 import logger from "../config/logger";
 import { v2 as cloudinary } from "cloudinary";
+import {
+  VENUE_HOLDING_EVENT_STATUSES,
+  findEventConflict,
+  getCalendarDayBusyBlocks,
+  mergeBlocks
+} from "../services/venueAvailability.service";
 
 /** Event flyers live on Cloudinary; only the https link is stored and sent to GHL. */
 const storeFlyer = async (raw: unknown): Promise<string> => {
@@ -25,6 +31,45 @@ const storeFlyer = async (raw: unknown): Promise<string> => {
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
+
+/** 1260 → "9:00 PM", 1560 → "2:00 AM (next day)" */
+const minutesToLabel = (mins: number): string => {
+  const nextDay = mins >= 1440;
+  const m = mins % 1440;
+  const h = Math.floor(m / 60);
+  const label = `${h % 12 === 0 ? 12 : h % 12}:${String(m % 60).padStart(2, "0")} ${h >= 12 ? "PM" : "AM"}`;
+  return nextDay ? `${label} (next day)` : label;
+};
+
+/**
+ * GET /api/events/venue-availability?date=YYYY-MM-DD
+ * Busy times at Tropica for a calendar day so the promoter's time pickers can grey them out.
+ * Minutes are relative to 00:00 New York time on `date` and may run past 1440 (into the next morning).
+ * Only generic labels are returned — never guest or other promoters' details.
+ */
+export const getVenueAvailability = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const date = sanitizeString(req.query.date);
+    if (!DATE_RE.test(date)) {
+      res.status(400).json({ success: false, message: "date must be YYYY-MM-DD" });
+      return;
+    }
+    const blocks = mergeBlocks(await getCalendarDayBusyBlocks(date));
+    res.status(200).json({
+      success: true,
+      date,
+      busy: blocks.map((b) => ({
+        start: b.start,
+        end: b.end,
+        label: b.label,
+        display: `${minutesToLabel(b.start)} – ${minutesToLabel(b.end)}`
+      }))
+    });
+  } catch (error: any) {
+    logger.error("Failed to load venue availability", { error: error.message });
+    next(new Error("Failed to load venue availability"));
+  }
+};
 
 /**
  * POST /api/events
@@ -97,6 +142,18 @@ export const createEvent = async (req: Request, res: Response, next: NextFunctio
         message: `The event must start in the future (at least ${SALES_CLOSE_MINUTES + 1} minutes from now, New York time)`
       });
       return;
+    }
+
+    // Tropica is one shared venue: the slot must be clear of venue bookings, other events and the Google Calendar
+    if (venueType === "tropica") {
+      const conflict = await findEventConflict(dateStr, startTime, endTime);
+      if (conflict) {
+        res.status(409).json({
+          success: false,
+          message: `Tropica is already booked from ${minutesToLabel(conflict.start)} to ${minutesToLabel(conflict.end)} on that date (${conflict.label.toLowerCase()}). Please choose a different time or date.`
+        });
+        return;
+      }
     }
 
     const venueLat = Number(req.body.venueLat);
@@ -386,6 +443,19 @@ export const requestEventApproval = async (req: Request, res: Response, next: Ne
         message: "Your promoter account must be approved before you can submit events for publication."
       });
       return;
+    }
+
+    if (event.venueType === "tropica" && !VENUE_HOLDING_EVENT_STATUSES.includes(event.status)) {
+      const conflict = await findEventConflict(event.date.toISOString().slice(0, 10), event.startTime, event.endTime, {
+        excludeEventId: event._id.toString()
+      });
+      if (conflict) {
+        res.status(409).json({
+          success: false,
+          message: `Tropica is already booked from ${minutesToLabel(conflict.start)} to ${minutesToLabel(conflict.end)} on that date. Please create the event for a different time or date.`
+        });
+        return;
+      }
     }
 
     event.status = "pending_approval";

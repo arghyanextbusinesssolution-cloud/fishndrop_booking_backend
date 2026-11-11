@@ -49,8 +49,7 @@ import { sendPaymentEmails, sendFullPaymentConfirmationViaEmailJS } from "../uti
 import { sendGHLBookingEvent, sendGHLEmployeeCreatedEvent } from "../integrations/ghl";
 import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
 import { sendQuoteViaGHL } from "../services/ghlQuote.service";
-import { createSlotLocksForPrivateEvent } from "../services/booking/private.service";
-import { formatToE164 } from "../services/ghlOtp.service";
+import { createSlotLocksForPrivateEvent } from "../services/booking/private.service";import { formatToE164 } from "../services/ghlOtp.service";
 
 /** Inline restaurant label map so backend does not depend on frontend lib */
 const CATERING_LABEL_MAP: Record<string, string> = {
@@ -463,6 +462,7 @@ export const deleteBooking = async (req: Request, res: Response, next: NextFunct
     if (booking.bookingType === "private_event") {
       await SlotLock.deleteMany({ eventId: booking._id });
     }
+    // Google Calendar entry is removed by the Booking delete hook
     await Booking.findByIdAndDelete(bookingId);
     res.status(200).json({ success: true, message: "Booking deleted successfully" });
   } catch (error) {

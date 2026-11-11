@@ -10,9 +10,18 @@ import {
     sendRemainingBalanceCancellationViaEmailJS
 } from "../utils/email.utils";
 import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
+import { reconcileCalendar } from "../services/calendarSync.service";
+import { isGoogleCalendarEnabled } from "../services/googleCalendar.service";
 
 export const startReminderCron = () => {
     logger.info("Initializing 72-hour email reminder & 15-min unpaid booking cleanup cron jobs...");
+
+    // Google Calendar safety net: retry failed syncs and catch changes made via bulk updates
+    cron.schedule("*/5 * * * *", () => {
+        void reconcileCalendar();
+    });
+    isGoogleCalendarEnabled(); // prints "✓ Enabled → calendar …" or "✗ Sync SKIPPED — …" at boot
+    setTimeout(() => void reconcileCalendar(), 15_000); // initial backfill shortly after boot
 
     // Auto-cleanup unpaid pending draft bookings every 2 minutes
     cron.schedule("*/2 * * * *", async () => {
