@@ -1,11 +1,9 @@
 import { NextFunction, Request, Response } from "express";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
 import User from "../models/User";
 import { getStripe } from "../utils/stripe.utils";
 import logger from "../config/logger";
 
-const getFrontendBaseUrl = (): string => {
-  return process.env.FRONTEND_BASE_URL || "http://localhost:3000";
-};
 
 /**
  * POST /api/payments/connect/create-account

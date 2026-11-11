@@ -15,6 +15,7 @@ import {
   updateBookingOfferPrice,
   createManualBooking,
   lookupCustomer,
+  verifyCustomerOtp,
   markBookingFullyPaid,
   getAllUsers,
   deleteUser,
@@ -48,6 +49,7 @@ router.get("/slot-locks", getSlotLocks);
 router.get("/bookings", getAllBookings);
 router.post("/bookings/manual", createManualBooking);
 router.get("/customers/lookup", lookupCustomer);
+router.post("/customers/verify-otp", verifyCustomerOtp);
 
 // User management routes
 router.get("/users", getAllUsers);

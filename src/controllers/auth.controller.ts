@@ -425,9 +425,12 @@ export const register = async (req: Request, res: Response, next: NextFunction):
 
 export const login = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const email = sanitizeString(req.body.email).toLowerCase();
-    const password = sanitizeString(req.body.password);
-    const phone = sanitizeString(req.body.phone);
+    const identifier = sanitizeString(req.body.email).toLowerCase();
+    const password = typeof req.body.password === "string" ? req.body.password.trim() : "";
+    // The login form has one "email or phone" box — anything without an "@" is treated as a phone number
+    const isEmail = identifier.includes("@");
+    const email = isEmail ? identifier : "";
+    const phone = sanitizeString(req.body.phone) || (!isEmail ? identifier : "");
 
     if (email && password) {
       // Admin / Email user login
@@ -453,11 +456,28 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
       return;
     }
 
-    if (phone) {
-      // Guest phone number login
-      const user = await User.findOne({ phone });
+    if (phone && password) {
+      // Phone number + password login (password set by the customer or by an admin)
+      const digits = phone.replace(/\D/g, "");
+      const last10 = digits.slice(-10);
+      if (last10.length < 10) {
+        res.status(401).json({ success: false, message: "Invalid phone number or password" });
+        return;
+      }
+      const candidates = await User.find({
+        $or: [{ phone: formatToE164(phone) }, { phone }, { phone: digits }, { phone: { $regex: last10 + "$" } }]
+      })
+        .select("+password")
+        .limit(5);
+      let user = null;
+      for (const candidate of candidates) {
+        if (await candidate.comparePassword(password)) {
+          user = candidate;
+          break;
+        }
+      }
       if (!user) {
-        res.status(404).json({ success: false, message: "User not found with this phone number" });
+        res.status(401).json({ success: false, message: "Invalid phone number or password" });
         return;
       }
       const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET as string, {

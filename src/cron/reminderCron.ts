@@ -1,4 +1,5 @@
 import cron from "node-cron";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
 import Booking from "../models/Booking";
 import SlotLock from "../models/SlotLock";
 import TicketOrder from "../models/TicketOrder";
@@ -88,7 +89,7 @@ export const startReminderCron = () => {
                 if (diffMins > 0 && diffMins <= (72 * 60) && !booking.remainingPaymentReminderSent) {
                     logger.info(`[Reminder Cron] Sending 72-hour remaining balance reminder for private event booking ${booking._id}`);
 
-                    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+                    const baseUrl = getFrontendBaseUrl();
                     // Deep link specifically built for the user payment interface
                     const paymentLink = `${baseUrl}/user/payment?is_balance=true&bookingId=${booking._id}`;
 

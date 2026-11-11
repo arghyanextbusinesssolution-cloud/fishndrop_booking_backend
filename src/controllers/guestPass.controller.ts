@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
 import Booking from "../models/Booking";
 import GuestPass, { generateGuestPassCode, generateGuestQrToken } from "../models/GuestPass";
 import logger from "../config/logger";
@@ -332,7 +333,7 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
     const checkedInCount = guestPasses.filter((g) => g.checkedIn).length;
     const approvedCount = guestPasses.filter((g) => g.status === "approved").length;
 
-    const baseUrl = process.env.FRONTEND_BASE_URL || "https://www.tropica.nyc";
+    const baseUrl = getFrontendBaseUrl();
     const inviteLink = `${baseUrl}/invite/${booking.invitationToken}`;
 
     res.status(200).json({
@@ -591,7 +592,7 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
     const signedUp = approved.length + pending.length;
     const capacity = booking.partySize || 0;
 
-    const baseUrl = process.env.FRONTEND_BASE_URL || "https://www.tropica.nyc";
+    const baseUrl = getFrontendBaseUrl();
     res.status(200).json({
       success: true,
       booking,

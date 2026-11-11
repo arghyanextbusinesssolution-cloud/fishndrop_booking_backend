@@ -23,7 +23,7 @@ export interface ISystemSettings extends Document {
   photographerBasePrice: number; // Default: $300 (covers 2 hours)
   photographerExtraHourPrice: number; // Default: $150/hr
   extraHourPrice: number; // Default: $125/hr (beyond 5 hours)
-  minDepositAmount: number; // Default: $200
+  minDepositAmount: number; // Default: $300
 
   // Data migration marker (see getSettings)
   pricingVersion: number;
@@ -35,7 +35,7 @@ export interface ISystemSettings extends Document {
   updatedAt: Date;
 }
 
-const CURRENT_PRICING_VERSION = 1;
+const CURRENT_PRICING_VERSION = 2;
 
 const auditEntrySchema =new Schema<IAuditEntry>(
   {
@@ -61,7 +61,7 @@ const systemSettingsSchema = new Schema<ISystemSettings>(
     photographerBasePrice: { type: Number, default: 300, min: 0 },
     photographerExtraHourPrice: { type: Number, default: 150, min: 0 },
     extraHourPrice: { type: Number, default: 125, min: 0 },
-    minDepositAmount: { type: Number, default: 200, min: 0 },
+    minDepositAmount: { type: Number, default: 300, min: 0 },
 
     pricingVersion: { type: Number, default: 0 },
 
@@ -86,7 +86,7 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
       photographerBasePrice: 300,
       photographerExtraHourPrice: 150,
       extraHourPrice: 125,
-      minDepositAmount: 200,
+      minDepositAmount: 300,
       pricingVersion: CURRENT_PRICING_VERSION,
       auditHistory: []
     });
@@ -103,6 +103,17 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
         modifiedAt: new Date(),
         changes: { perGuestPrice: { previous, current: 50 } },
         notes: "Per-guest rate updated from $35 to $50"
+      });
+    }
+    // v2: venue deposit minimum raised from $200 to $300
+    if (settings.minDepositAmount === 200) {
+      settings.minDepositAmount = 300;
+      settings.auditHistory.push({
+        modifiedBy: "system",
+        modifiedByName: "System Migration",
+        modifiedAt: new Date(),
+        changes: { minDepositAmount: { previous: 200, current: 300 } },
+        notes: "Venue minimum deposit updated from $200 to $300"
       });
     }
     settings.pricingVersion = CURRENT_PRICING_VERSION;

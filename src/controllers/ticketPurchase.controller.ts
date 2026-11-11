@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response } from "express";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
 import mongoose from "mongoose";
 import Event from "../models/Event";
 import TicketOrder, { generateOrderNumber } from "../models/TicketOrder";
@@ -19,9 +20,6 @@ const sanitizeString = (value: unknown): string =>
 export const GUEST_CANCEL_WINDOW_MS = 48 * 60 * 60 * 1000;
 export const generateShareToken = (): string => `shr_${crypto.randomBytes(18).toString("hex")}`;
 
-const getFrontendBaseUrl = (): string => {
-  return process.env.FRONTEND_BASE_URL || "http://localhost:3000";
-};
 
 /**
  * POST /api/tickets/checkout

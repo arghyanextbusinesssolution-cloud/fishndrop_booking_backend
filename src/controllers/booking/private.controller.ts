@@ -177,9 +177,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       }
     }
 
-    // Deposit = $200 to secure date and time
-    let minDeposit = Math.min(currentAmount, settings.minDepositAmount ?? 200);
-    let depositAmount = Math.min(currentAmount, settings.minDepositAmount ?? 200);
+    // Deposit = minimum $300 (SystemSettings.minDepositAmount) to secure date and time
+    let minDeposit = Math.min(currentAmount, settings.minDepositAmount ?? 300);
+    let depositAmount = Math.min(currentAmount, settings.minDepositAmount ?? 300);
     if (req.body.customDepositAmount) {
       const custom = Number(req.body.customDepositAmount);
       if (!isNaN(custom) && custom >= minDeposit && custom <= currentAmount) {

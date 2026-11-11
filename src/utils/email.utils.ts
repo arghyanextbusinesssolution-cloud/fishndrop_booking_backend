@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { getFrontendBaseUrl } from "./siteUrl";
 import { IBooking } from "../models/Booking";
 import logger from "../config/logger";
 
@@ -170,7 +171,7 @@ export const sendPaymentEmails = async (booking: IBooking) => {
           </tr>
         </table>
 
-        <a href="${process.env.FRONTEND_BASE_URL || 'http://localhost:3000'}/admin/bookings" style="display: block; width: 100%; padding: 12px; background-color: #111827; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; text-align: center; font-size: 14px;">Review in Dashboard</a>
+        <a href="${getFrontendBaseUrl()}/admin/bookings" style="display: block; width: 100%; padding: 12px; background-color: #111827; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600; text-align: center; font-size: 14px;">Review in Dashboard</a>
       </div>
     `;
 
@@ -365,7 +366,7 @@ export const sendEmployeeCredentialsEmail = async (params: {
   loginUrl?: string;
 }): Promise<boolean> => {
   const { employeeName, employeeEmail, temporaryPassword, loginUrl } = params;
-  const targetLoginUrl = loginUrl || `${process.env.FRONTEND_BASE_URL || "http://localhost:3000"}/employee-login`;
+  const targetLoginUrl = loginUrl || `${getFrontendBaseUrl()}/employee-login`;
 
   console.log(`\n======================================================`);
   console.log(`📨 [EMPLOYEE ACCOUNT CREATED] Credentials Generated:`);

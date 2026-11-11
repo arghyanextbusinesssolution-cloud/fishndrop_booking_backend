@@ -1,4 +1,6 @@
 import { NextFunction, Request, Response } from "express";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
+import crypto from "crypto";
 import Booking from "../models/Booking";
 import SlotLock from "../models/SlotLock";
 import Table from "../models/Table";
@@ -794,7 +796,7 @@ export const lookupCustomer = async (req: Request, res: Response, next: NextFunc
       conditions.push({ email });
     }
 
-    const user = await User.findOne({ $or: conditions }).select("name email phone role isPhoneVerified");
+    const user = await User.findOne({ $or: conditions }).select("name email phone role isPhoneVerified +password");
     if (!user) {
       res.status(200).json({ success: true, exists: false });
       return;
@@ -811,11 +813,43 @@ export const lookupCustomer = async (req: Request, res: Response, next: NextFunc
         email: user.email,
         phone: user.phone,
         role: user.role,
+        isPhoneVerified: Boolean(user.isPhoneVerified),
+        hasPassword: Boolean(user.password),
         pastBookingsCount
       }
     });
   } catch (error) {
     next(new Error("Customer lookup failed"));
+  }
+};
+
+/**
+ * POST /api/admin/customers/verify-otp
+ * Checks the code the customer received (sent via /auth/send-otp) WITHOUT logging the
+ * admin in as that customer — no token is issued. Used by the admin manual booking wizard.
+ */
+export const verifyCustomerOtp = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const phone = sanitizeString(req.body.phone);
+    const code = sanitizeString(req.body.otp || req.body.code);
+    if (!phone || !code) {
+      res.status(400).json({ success: false, message: "Phone number and verification code are required" });
+      return;
+    }
+
+    const rawPhone = formatToE164(phone);
+    const isDevTestCode = code === "1234" && process.env.NODE_ENV === "development";
+    const record = await OtpCode.findOne({ phone: rawPhone, code, expiresAt: { $gt: new Date() } });
+
+    if (!record && !isDevTestCode) {
+      res.status(400).json({ success: false, message: "Invalid or expired verification code" });
+      return;
+    }
+
+    await OtpCode.deleteMany({ phone: rawPhone }).catch(() => {});
+    res.status(200).json({ success: true, verified: true, phone: rawPhone });
+  } catch (error) {
+    next(new Error("Customer OTP verification failed"));
   }
 };
 
@@ -842,6 +876,13 @@ export const createManualBooking = async (req: Request, res: Response, next: Nex
 
     const last10 = cleanDigits.slice(-10);
 
+    // Optional login password the admin sets (or resets) for the customer: phone + password login
+    const customerPassword = typeof req.body.customerPassword === "string" ? req.body.customerPassword.trim() : "";
+    if (customerPassword && customerPassword.length < 6) {
+      res.status(400).json({ success: false, message: "Customer password must be at least 6 characters" });
+      return;
+    }
+
     // 1. Resolve or Create User Account WITHOUT OTP (Stored with E.164 phone to match OTP login)
     let user = await User.findOne({
       $or: [
@@ -853,18 +894,35 @@ export const createManualBooking = async (req: Request, res: Response, next: Nex
       ]
     });
 
+    // Passwords can only be set on customer accounts — never on admin/staff/promoter logins
+    if (user && customerPassword && user.role !== "user") {
+      res.status(400).json({
+        success: false,
+        message: `This phone number belongs to a ${user.role} account. Its password can't be changed from here.`
+      });
+      return;
+    }
+
     let accountCreated = false;
+    let passwordSet = false;
     if (!user) {
       user = await User.create({
         name: customerName,
         phone: formattedPhone,
         email: customerEmail,
         role: "user",
-        isPhoneVerified: true // Pre-verified; ready for OTP login on customer end
+        isPhoneVerified: true, // Pre-verified; ready for OTP login on customer end
+        ...(customerPassword ? { password: customerPassword } : {})
       });
       accountCreated = true;
+      passwordSet = Boolean(customerPassword);
     } else {
       let shouldUpdate = false;
+      if (customerPassword) {
+        user.password = customerPassword; // hashed by the User pre-save hook
+        passwordSet = true;
+        shouldUpdate = true;
+      }
       if (customerName && (!user.name || user.name === "Walk-in Guest" || user.name === "Guest User")) {
         user.name = customerName;
         shouldUpdate = true;
@@ -1065,8 +1123,12 @@ export const createManualBooking = async (req: Request, res: Response, next: Nex
       contractedAmount: totalAmount,
       collectedAmount: paidAmount,
       outstandingBalance: remainingAmount,
-      paymentDueDate
+      paymentDueDate,
+      // Guest share link (/invite/:token) is ready straight away for venue buyouts
+      ...(bookingType === "private_event" ? { invitationToken: crypto.randomBytes(16).toString("hex") } : {})
     });
+    const baseUrl = getFrontendBaseUrl();
+    const inviteLink = booking.invitationToken ? `${baseUrl}/invite/${booking.invitationToken}` : null;
 
     // 5. If private event buyout, create SlotLock records for each overlapping slot
     if (bookingType === "private_event") {
@@ -1089,6 +1151,8 @@ export const createManualBooking = async (req: Request, res: Response, next: Nex
       message: "Manual booking created successfully. Slot has been blocked in the database.",
       booking,
       accountCreated,
+      passwordSet,
+      inviteLink,
       user: {
         id: user._id,
         name: user.name,
@@ -1484,7 +1548,7 @@ export const createEmployee = async (req: Request, res: Response, next: NextFunc
       employeeName: name,
       employeeEmail: email,
       temporaryPassword: password,
-      loginUrl: `${process.env.FRONTEND_BASE_URL || "http://localhost:3000"}/employee-login`
+      loginUrl: `${getFrontendBaseUrl()}/employee-login`
     });
 
     // Push the new employee account to GoHighLevel (fire-and-forget; never blocks the response)

@@ -27,7 +27,7 @@ export interface IBooking extends Document {
   bookingDate: Date;
   bookingTime: string;
   status: "pending" | "confirmed" | "cancelled";
-  /** For Private events: starts at pending_payment, moves to deposit_paid on $200 checkout, then paid when balance is settled. For standard: pending_payment -> paid */
+  /** For Private events: starts at pending_payment, moves to deposit_paid on deposit checkout (min $300), then paid when balance is settled. For standard: pending_payment -> paid */
   paymentStatus: "pending_payment" | "deposit_paid" | "paid";
   bookingType: "standard" | "private_event";
   durationHours?: number;

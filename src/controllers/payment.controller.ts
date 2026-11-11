@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { getFrontendBaseUrl } from "../utils/siteUrl";
 import fs from "fs";
 import path from "path";
 import Stripe from "stripe";
@@ -122,7 +123,7 @@ function computeChargeAmount(amountInDollars: number): number {
 
 /**
  * Initial checkout session.
- * For private_event bookings: charges only the $200 deposit (booking.depositAmount).
+ * For private_event bookings: charges only the deposit (booking.depositAmount, minimum $300).
  * For standard bookings: charges full amount (depositAmount == totalAmount).
  */
 export const createCheckoutSession = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -163,10 +164,10 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
       return;
     }
 
-    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const tableNumbers = (booking.tables as any[]).map(t => t.tableNumber).join(", ");
 
-    // Charge deposit amount (for private events this is $200, for standard it's the full amount)
+    // Charge deposit amount (for private events this is the chosen deposit, min $300; for standard it's the full amount)
     const chargeAmount = computeChargeAmount(booking.depositAmount);
 
     const isPrivate = booking.bookingType === "private_event";
@@ -186,7 +187,7 @@ export const createCheckoutSession = async (req: Request, res: Response, next: N
           price_data: {
             currency: "usd",
             product_data: {
-              name: isPrivate ? "Tropica Venue – Security Deposit ($200)" : "Tropica Sanctuary Reservation",
+              name: isPrivate ? `Tropica Venue – Security Deposit ($${(booking.depositAmount || 0).toFixed(2)})` : "Tropica Sanctuary Reservation",
               description: depositLabel
             },
             unit_amount: chargeAmount
@@ -262,7 +263,7 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
 
       const foodCharge = booking.offerPrice;
       const chargeAmount = computeChargeAmount(foodCharge);
-      const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+      const baseUrl = getFrontendBaseUrl();
 
       const session = await stripe.checkout.sessions.create({
         mode: "payment",
@@ -315,7 +316,7 @@ export const createRemainingCheckoutSession = async (req: Request, res: Response
       ? Math.round(customAmount * 100) / 100
       : booking.remainingAmount;
 
-    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
     const chargeAmount = computeChargeAmount(amountToCharge);
     const isPartial = amountToCharge < booking.remainingAmount;
     const iterationNum = (booking.paymentBreakdown?.length || 0) + 1;
@@ -528,7 +529,7 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
           void sendFullPaymentConfirmationViaEmailJS(booking);
           void sendGHLBookingEvent(booking);
         } else {
-          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const baseUrl = getFrontendBaseUrl();
           const paymentLink = `${baseUrl}/user/venue-bookings`;
           void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
           void sendGHLBookingEvent(booking);
@@ -578,7 +579,7 @@ export const verifyCheckoutSession = async (req: Request, res: Response, next: N
 
       // ✅ Send EmailJS balance-due reminder if there's still a remaining amount
       if (booking.remainingAmount > 0) {
-        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const baseUrl = getFrontendBaseUrl();
         const paymentLink = `${baseUrl}/user/venue-bookings`;
         console.log(`\n🟡 [EmailJS] Deposit confirmed for booking ${bookingId}`);
         console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
@@ -678,7 +679,7 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
           void sendFullPaymentConfirmationViaEmailJS(booking);
           void sendGHLBookingEvent(booking);
         } else {
-          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const baseUrl = getFrontendBaseUrl();
           const paymentLink = `${baseUrl}/user/venue-bookings`;
           void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
           void sendGHLBookingEvent(booking);
@@ -722,7 +723,7 @@ export const verifyPaymentIntent = async (req: Request, res: Response, next: Nex
       }
 
       if (booking.remainingAmount > 0) {
-        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const baseUrl = getFrontendBaseUrl();
         const paymentLink = `${baseUrl}/user/venue-bookings`;
         console.log(`\n🟡 [EmailJS] PaymentIntent verified for booking ${bookingId}`);
         console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
@@ -812,7 +813,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
                   void sendFullPaymentConfirmationViaEmailJS(booking);
                   void sendGHLBookingEvent(booking);
                 } else {
-                  const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+                  const baseUrl = getFrontendBaseUrl();
                   const paymentLink = `${baseUrl}/user/venue-bookings`;
                   void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
                   void sendGHLBookingEvent(booking);
@@ -853,7 +854,7 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
               }
 
               if (booking.remainingAmount > 0) {
-                const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+                const baseUrl = getFrontendBaseUrl();
                 const paymentLink = `${baseUrl}/user/venue-bookings`;
                 console.log(`\n🟡 [EmailJS] Stripe Webhook: Deposit confirmed for booking ${bookingId}`);
                 console.log(`🟡 [EmailJS] Remaining balance: $${booking.remainingAmount} — sending reminder to ${booking.customerEmail}`);
@@ -1379,7 +1380,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
         if (isFullyPaid) {
           void sendFullPaymentConfirmationViaEmailJS(booking);
         } else {
-          const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+          const baseUrl = getFrontendBaseUrl();
           const paymentLink = `${baseUrl}/user/venue-bookings`;
           void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
         }
@@ -1445,7 +1446,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
       // Trigger confirmation email & GHL events back to GHL
       void sendPaymentEmails(booking);
       if (!isBalancePayment && booking.remainingAmount > 0) {
-        const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+        const baseUrl = getFrontendBaseUrl();
         const paymentLink = `${baseUrl}/user/venue-bookings`;
         void sendRemainingBalanceReminderViaEmailJS(booking, paymentLink);
       } else if (!isBalancePayment && booking.remainingAmount <= 0) {
@@ -1520,7 +1521,7 @@ export const createTourCheckoutSession = async (req: Request, res: Response, nex
       return;
     }
 
-    const baseUrl = process.env.FRONTEND_BASE_URL || "http://localhost:3000";
+    const baseUrl = getFrontendBaseUrl();
 
     // $25 tour fee — always charge the real amount
     const TOUR_AMOUNT_CENTS = 2500; // $25.00
