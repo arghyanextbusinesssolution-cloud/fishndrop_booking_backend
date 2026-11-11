@@ -27,7 +27,9 @@ import {
   createEmployee,
   deleteEmployee,
   getSystemSettings,
-  updateSystemSettings
+  updateSystemSettings,
+  updateBookingDetails,
+  updateUser
 } from "../controllers/admin.controller";
 import { getAdminBookingOverview } from "../controllers/guestPass.controller";
 import { getDataCenter, exportDataCenter } from "../controllers/dataCenter.controller";
@@ -53,6 +55,7 @@ router.post("/customers/verify-otp", verifyCustomerOtp);
 
 // User management routes
 router.get("/users", getAllUsers);
+router.patch("/users/:id", updateUser);
 router.delete("/users/:id", adminOnly, deleteUser);
 router.post("/users/bulk-delete", adminOnly, deleteBulkUsers);
 
@@ -78,6 +81,7 @@ router.get("/data-center/export", adminOnly, exportDataCenter);
 router.patch("/bookings/:id/verify-zelle", verifyAdminZelleBooking);
 router.patch("/bookings/:id/mark-paid", markBookingFullyPaid);
 router.patch("/bookings/:id/offer", updateBookingOfferPrice);
+router.patch("/bookings/:id/details", updateBookingDetails);
 router.patch("/bookings/:id/menu", updateBookingMenu);
 router.patch("/bookings/:id/reschedule", rescheduleBooking);
 router.delete("/bookings/:id", deleteBooking);

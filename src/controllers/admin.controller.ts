@@ -8,6 +8,7 @@ import DailyTableLock from "../models/DailyTableLock";
 import User from "../models/User";
 import OtpCode from "../models/OtpCode";
 import { clearEmployeeContactsCache } from "../integrations/ghl/helpers/team";
+import logger from "../config/logger";
 
 const escapeRx = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -1720,5 +1721,208 @@ export const updateSystemSettings = async (req: Request, res: Response, next: Ne
     });
   } catch (error: any) {
     next(new Error(`Failed to update system settings: ${error.message}`));
+  }
+};
+
+/* ───────────────────────── Edit booking & user details ───────────────────────── */
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+type ContactInput = { name?: string; email?: string; phone?: string };
+
+/** Validates name / email / phone. Only keys that were sent are returned; "" means "clear it". */
+const parseContact = (raw: { name?: unknown; email?: unknown; phone?: unknown }): { values: ContactInput; error?: string } => {
+  const values: ContactInput = {};
+  if (raw.name !== undefined) {
+    const name = sanitizeString(raw.name);
+    if (name.length < 2 || name.length > 100) return { values, error: "Name must be 2–100 characters" };
+    values.name = name;
+  }
+  if (raw.email !== undefined) {
+    const email = sanitizeString(raw.email).toLowerCase();
+    if (email && !EMAIL_RE.test(email)) return { values, error: "Please enter a valid email address" };
+    values.email = email;
+  }
+  if (raw.phone !== undefined) {
+    const input = sanitizeString(raw.phone);
+    const phone = input ? formatToE164(input) : "";
+    const digits = phone.replace(/\D/g, "");
+    if (input && (digits.length < 7 || digits.length > 15)) return { values, error: "Please enter a valid phone number" };
+    values.phone = phone;
+  }
+  return { values };
+};
+
+/**
+ * Applies contact changes to a user account after checking no other account already uses the email / phone.
+ * Returns an error message (and changes nothing) on conflict.
+ */
+const applyContactToUser = async (user: any, c: ContactInput): Promise<string | null> => {
+  if (c.email && c.email !== user.email && (await User.exists({ email: c.email, _id: { $ne: user._id } }))) {
+    return `Another account already uses ${c.email}`;
+  }
+  if (c.phone && c.phone !== user.phone && (await User.exists({ phone: c.phone, _id: { $ne: user._id } }))) {
+    return `Another account already uses ${c.phone}`;
+  }
+  const nextEmail = c.email !== undefined ? c.email : user.email;
+  const nextPhone = c.phone !== undefined ? c.phone : user.phone;
+  if (!nextEmail && !nextPhone) return "An account needs at least an email or a phone number";
+
+  if (c.name !== undefined) user.name = c.name;
+  if (c.email !== undefined) user.email = c.email || undefined;
+  if (c.phone !== undefined && c.phone !== (user.phone || "")) {
+    user.phone = c.phone || undefined;
+    // The new number hasn't been confirmed by a text code yet; it gets verified on the next OTP sign in.
+    user.isPhoneVerified = false;
+  }
+  return null;
+};
+
+const isDuplicateKey = (err: any) => err?.code === 11000;
+
+/**
+ * PATCH /api/admin/bookings/:id/details
+ * Edit a booking's customer contact and event details (date/time changes go through /reschedule).
+ * Body: customerName, customerEmail, customerPhone, partySize, occasion, notes, updateAccount (bool)
+ */
+export const updateBookingDetails = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const booking = await Booking.findById(String(req.params.id));
+    if (!booking) {
+      res.status(404).json({ success: false, message: "Booking not found" });
+      return;
+    }
+
+    const { values: contact, error } = parseContact({
+      name: req.body.customerName,
+      email: req.body.customerEmail,
+      phone: req.body.customerPhone
+    });
+    if (error) {
+      res.status(400).json({ success: false, message: error });
+      return;
+    }
+    if (contact.email === "" || contact.phone === "") {
+      res.status(400).json({ success: false, message: "A booking needs the customer's email and phone" });
+      return;
+    }
+
+    if (req.body.partySize !== undefined) {
+      const partySize = Number(req.body.partySize);
+      if (!Number.isInteger(partySize) || partySize < 2 || partySize > 1000) {
+        res.status(400).json({ success: false, message: "Guests must be a whole number of at least 2" });
+        return;
+      }
+      booking.partySize = partySize;
+    }
+    if (req.body.occasion !== undefined) {
+      const occasion = sanitizeString(req.body.occasion).toLowerCase().replace(/\s+/g, "_").slice(0, 50);
+      if (!occasion) {
+        res.status(400).json({ success: false, message: "Occasion is required" });
+        return;
+      }
+      booking.occasion = occasion as any;
+    }
+    if (req.body.notes !== undefined) booking.notes = sanitizeString(req.body.notes).slice(0, 3000);
+
+    // Optionally copy the contact changes onto the customer's account too
+    let accountUpdated = false;
+    if (req.body.updateAccount && booking.user && Object.keys(contact).length) {
+      const account = await User.findById(booking.user);
+      if (account) {
+        const conflict = await applyContactToUser(account, contact);
+        if (conflict) {
+          res.status(409).json({ success: false, message: `${conflict}. Untick "Also update the customer's account" to change only this booking.` });
+          return;
+        }
+        await account.save();
+        accountUpdated = true;
+      }
+    }
+
+    if (contact.name !== undefined) booking.customerName = contact.name;
+    if (contact.email !== undefined) booking.customerEmail = contact.email;
+    if (contact.phone !== undefined) booking.customerPhone = contact.phone;
+
+    await booking.save(); // also re-syncs Google Calendar for venue bookings
+
+    logger.info(`[Booking Edit] #${booking._id} updated by ${req.user?.email || req.user?._id}${accountUpdated ? " (account updated too)" : ""}`);
+    res.status(200).json({ success: true, message: accountUpdated ? "Booking and customer account updated" : "Booking updated", booking });
+  } catch (error: any) {
+    if (isDuplicateKey(error)) {
+      res.status(409).json({ success: false, message: "That email or phone is already used by another account" });
+      return;
+    }
+    next(new Error(`Failed to update booking: ${error.message}`));
+  }
+};
+
+/**
+ * PATCH /api/admin/users/:id
+ * Edit a user's name, email and phone. Body: name, email, phone, updateUpcomingBookings (bool)
+ */
+export const updateUser = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const user = await User.findById(String(req.params.id));
+    if (!user) {
+      res.status(404).json({ success: false, message: "User not found" });
+      return;
+    }
+
+    const actorRole = req.user?.role;
+    const isSelf = req.user?._id?.toString() === user._id.toString();
+    if (!isSelf && ["admin", "owner"].includes(user.role) && actorRole !== "owner") {
+      res.status(403).json({ success: false, message: "Only the owner can edit admin accounts" });
+      return;
+    }
+    if (!isSelf && user.role === "staff" && actorRole === "staff") {
+      res.status(403).json({ success: false, message: "Only admins can edit employee accounts" });
+      return;
+    }
+
+    const { values: contact, error } = parseContact({ name: req.body.name, email: req.body.email, phone: req.body.phone });
+    if (error) {
+      res.status(400).json({ success: false, message: error });
+      return;
+    }
+
+    const conflict = await applyContactToUser(user, contact);
+    if (conflict) {
+      res.status(409).json({ success: false, message: conflict });
+      return;
+    }
+    await user.save();
+    if (user.role === "staff") clearEmployeeContactsCache();
+
+    // Keep upcoming bookings in step so confirmations, door lists and the calendar show the new details
+    let bookingsUpdated = 0;
+    if (req.body.updateUpcomingBookings) {
+      const startOfToday = new Date();
+      startOfToday.setUTCHours(0, 0, 0, 0);
+      const upcoming = await Booking.find({ user: user._id, status: { $ne: "cancelled" }, bookingDate: { $gte: startOfToday } });
+      for (const b of upcoming) {
+        if (contact.name) b.customerName = contact.name;
+        if (contact.email) b.customerEmail = contact.email;
+        if (contact.phone) b.customerPhone = contact.phone;
+        if (b.isModified()) {
+          await b.save();
+          bookingsUpdated++;
+        }
+      }
+    }
+
+    logger.info(`[User Edit] ${user._id} updated by ${req.user?.email || req.user?._id}; ${bookingsUpdated} upcoming booking(s) synced`);
+    res.status(200).json({
+      success: true,
+      message: bookingsUpdated ? `User updated, plus ${bookingsUpdated} upcoming booking(s)` : "User updated",
+      user: user.toObject(),
+      bookingsUpdated
+    });
+  } catch (error: any) {
+    if (isDuplicateKey(error)) {
+      res.status(409).json({ success: false, message: "That email or phone is already used by another account" });
+      return;
+    }
+    next(new Error(`Failed to update user: ${error.message}`));
   }
 };
