@@ -103,6 +103,11 @@ app.use((req, res, next) => {
 app.use(globalRateLimiter);
 app.use(timeoutMiddleware);
 
+// Google Search Console / domain ownership verification
+app.get("/google33dab4718070a60a.html", (req, res) => {
+  res.type("text/html").send("google-site-verification: google33dab4718070a60a.html");
+});
+
 app.get("/api/health", (req, res) => {
   const isDbConnected = mongoose.connection.readyState === 1;
   res.status(isDbConnected ? 200 : 503).json({
