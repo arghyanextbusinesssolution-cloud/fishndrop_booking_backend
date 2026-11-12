@@ -6,6 +6,7 @@ import logger from "../config/logger";
 import { sendGHLGuestPassIssuedEvent, sendGHLGuestPassCancelledEvent } from "../integrations/ghl";
 import jwt from "jsonwebtoken";
 import User from "../models/User";
+import { storeImage } from "../utils/flyer.utils";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
@@ -92,6 +93,8 @@ export const getInvitationDetails = async (req: Request, res: Response, next: Ne
       invitation: {
         hostName: firstName(booking.customerName),
         occasion: booking.occasion || "celebration",
+        eventTitle: booking.eventTitle || "",
+        flyerUrl: booking.flyerUrl || "",
         date: booking.bookingDate,
         startTime: booking.bookingTime,
         endTime: (booking as any).eventEndTime || "",
@@ -348,7 +351,9 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
         startTime: booking.bookingTime,
         endTime: (booking as any).eventEndTime || "",
         occasion: booking.occasion || "celebration",
-        hostName: firstName(booking.customerName)
+        hostName: firstName(booking.customerName),
+        eventTitle: booking.eventTitle || "",
+        flyerUrl: booking.flyerUrl || ""
       },
       totalRegistered: guestPasses.length,
       approvedCount,
@@ -357,6 +362,58 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
     });
   } catch (error: any) {
     next(new Error(`Failed to fetch guest passes: ${error.message}`));
+  }
+};
+
+/**
+ * PATCH /api/invitations/booking/:bookingId/details   (host, or venue staff)
+ * Host names their party and uploads / replaces / removes its flyer.
+ * Body: eventTitle (""=use default), flyerUrl (data URL to upload, https URL to keep, "" to remove)
+ */
+export const updateCelebrationDetails = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+    const booking = await Booking.findById(sanitizeString(req.params.bookingId));
+    if (!booking || booking.bookingType !== "private_event") {
+      res.status(404).json({ success: false, message: "Celebration not found" });
+      return;
+    }
+    const isOwner = booking.user.toString() === req.user._id.toString();
+    const isStaff = ["admin", "owner", "staff"].includes(req.user.role);
+    if (!isOwner && !isStaff) {
+      res.status(403).json({ success: false, message: "Only the host can edit this celebration" });
+      return;
+    }
+
+    if (req.body.eventTitle !== undefined) {
+      const title = sanitizeString(req.body.eventTitle);
+      if (title.length > 80) {
+        res.status(400).json({ success: false, message: "Event name can be at most 80 characters" });
+        return;
+      }
+      booking.eventTitle = title || undefined;
+    }
+    if (req.body.flyerUrl !== undefined) {
+      try {
+        booking.flyerUrl = (await storeImage(req.body.flyerUrl, "tropica_celebration_flyers")) || undefined;
+      } catch (err: any) {
+        res.status(400).json({ success: false, message: `We couldn't upload the flyer (${err.message}). Please choose it again.` });
+        return;
+      }
+    }
+
+    await booking.save();
+    logger.info(`Celebration #${booking._id} details updated by ${req.user.name || req.user._id}`);
+    res.status(200).json({
+      success: true,
+      message: "Event details saved",
+      event: { eventTitle: booking.eventTitle || "", flyerUrl: booking.flyerUrl || "" }
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to update celebration: ${error.message}`));
   }
 };
 
@@ -493,7 +550,9 @@ export const getGuestPassByQrToken = async (req: Request, res: Response, next: N
         checkedInByName: pass.checkedInByName,
         qrCodeToken: pass.qrCodeToken,
         event: {
-          title: `${firstName(booking?.customerName)}'s ${occasion}`,
+          title: booking?.eventTitle || `${firstName(booking?.customerName)}'s ${occasion}`,
+          flyerUrl: booking?.flyerUrl || "",
+          occasion,
           hostName: booking?.customerName,
           date: booking?.bookingDate,
           startTime: booking?.bookingTime,
@@ -521,7 +580,7 @@ export const getMyCelebrations = async (req: Request, res: Response, next: NextF
       return;
     }
     const bookings = await Booking.find({ user: req.user._id, bookingType: "private_event", status: { $ne: "cancelled" } })
-      .select("bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus paymentMethod zelleProofUrl zelleVerificationStatus")
+      .select("bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus paymentMethod zelleProofUrl zelleVerificationStatus eventTitle flyerUrl")
       .sort({ bookingDate: -1 })
       .lean();
 
@@ -550,6 +609,8 @@ export const getMyCelebrations = async (req: Request, res: Response, next: NextF
           endTime: b.eventEndTime || "",
           durationHours: b.durationHours,
           occasion: b.occasion || "celebration",
+          eventTitle: b.eventTitle || "",
+          flyerUrl: b.flyerUrl || "",
           capacity: b.partySize,
           registered: c.registered,
           pendingApproval: c.pending,
@@ -584,7 +645,7 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
     if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
 
     const passes = await GuestPass.find({ $or: or, status: { $nin: ["rejected", "cancelled", "removed"] } })
-      .populate("booking", "customerName occasion bookingDate bookingTime eventEndTime durationHours status invitationToken user")
+      .populate("booking", "customerName occasion bookingDate bookingTime eventEndTime durationHours status invitationToken user eventTitle flyerUrl")
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
@@ -595,6 +656,8 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
         _id: p._id,
         hostName: firstName(p.booking.customerName),
         occasion: p.booking.occasion || "celebration",
+        eventTitle: p.booking.eventTitle || "",
+        flyerUrl: p.booking.flyerUrl || "",
         date: p.booking.bookingDate,
         startTime: p.booking.bookingTime,
         endTime: p.booking.eventEndTime || "",
@@ -642,7 +705,7 @@ export const getAdminCelebrations = async (req: Request, res: Response, next: Ne
     }
 
     const bookings = await Booking.find(filter)
-      .select("customerName customerPhone customerEmail bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus")
+      .select("customerName customerPhone customerEmail bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus eventTitle flyerUrl")
       .sort({ bookingDate: when === "past" ? -1 : 1, bookingTime: 1 })
       .limit(200)
       .lean();
@@ -673,6 +736,8 @@ export const getAdminCelebrations = async (req: Request, res: Response, next: Ne
         startTime: b.bookingTime,
         endTime: b.eventEndTime || "",
         occasion: b.occasion || "celebration",
+        eventTitle: b.eventTitle || "",
+        flyerUrl: b.flyerUrl || "",
         status: b.status,
         paymentStatus: b.paymentStatus,
         capacity: b.partySize || 0,

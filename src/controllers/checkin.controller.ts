@@ -456,7 +456,7 @@ export const getAdmissionDetails = async (req: Request, res: Response, next: Nex
         return;
       }
       const pass = await GuestPass.findById(id)
-        .populate("booking", "customerName customerPhone customerEmail bookingDate bookingTime eventEndTime occasion partySize")
+        .populate("booking", "customerName customerPhone customerEmail bookingDate bookingTime eventEndTime occasion partySize eventTitle")
         .populate("user", "name email phone createdAt isPhoneVerified")
         .lean();
       if (!pass) {
@@ -482,7 +482,7 @@ export const getAdmissionDetails = async (req: Request, res: Response, next: Nex
           ? {
               kind: "celebration",
               bookingId: String(booking._id),
-              title: `${booking.customerName}'s ${(booking.occasion || "celebration").replace(/_/g, " ")}`,
+              title: booking.eventTitle || `${booking.customerName}'s ${(booking.occasion || "celebration").replace(/_/g, " ")}`,
               hostName: booking.customerName,
               hostPhone: booking.customerPhone,
               date: booking.bookingDate,

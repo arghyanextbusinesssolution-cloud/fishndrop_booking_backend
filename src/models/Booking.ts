@@ -133,6 +133,8 @@ export interface IBooking extends Document {
 
   // Event Timing & Reschedule Tracking
   eventEndTime?: string;
+  eventTitle?: string; // host-chosen party name shown on invites (e.g. "Arty's 30th")
+  flyerUrl?: string; // host-uploaded party flyer
   cancellationReason?: string;
   rescheduledAt?: Date;
   rescheduleCount?: number;
@@ -388,6 +390,8 @@ const bookingSchema = new Schema<IBooking>(
 
     // Event Timing & Reschedule Tracking
     eventEndTime: { type: String },
+    eventTitle: { type: String, trim: true, maxlength: 80 },
+    flyerUrl: { type: String, trim: true },
     cancellationReason: { type: String },
     rescheduledAt: { type: Date },
     rescheduleCount: { type: Number, default: 0 },
