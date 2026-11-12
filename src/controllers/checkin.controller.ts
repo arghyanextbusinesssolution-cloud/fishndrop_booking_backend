@@ -54,6 +54,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         res.status(409).json({
           success: false,
           code: "ALREADY_CHECKED_IN",
+          admission: { kind: "group", id: String(order._id) },
           message: `DUPLICATE ADMISSION: All ${all.length} people on this group pass are already checked in${
             last ? ` (last at ${last.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })})` : ""
           }.`,
@@ -82,6 +83,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         }. Welcome, ${order.customerName}'s group!`,
         admitted: pending.length,
         groupSize: all.length,
+        admission: { kind: "group", id: String(order._id) },
         ticket: {
           ticketCode: order.orderNumber,
           customerName: `${order.customerName} + group`,
@@ -183,6 +185,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
           success: false,
           code: "ALREADY_CHECKED_IN",
           message: `DUPLICATE ADMISSION: Already checked in at ${checkInTime} by ${ticket.checkedInByName || "Staff"}.`,
+          admission: { kind: "ticket", id: String(ticket._id) },
           ticket: {
             ticketCode: ticket.ticketCode,
             customerName: attendeeName,
@@ -206,6 +209,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
           success: false,
           code: "ALREADY_CHECKED_IN",
           message: "DUPLICATE ADMISSION: This ticket was just checked in at another door.",
+          admission: { kind: "ticket", id: String(ticket._id) },
           ticket: { ticketCode: ticket.ticketCode, customerName: attendeeName, tierName: tierLabel }
         });
         return;
@@ -223,6 +227,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         success: true,
         code: "CHECK_IN_SUCCESS",
         message: `Admission Confirmed! Welcome, ${attendeeName}.`,
+        admission: { kind: "ticket", id: String(ticket._id) },
         ticket: {
           ticketCode: ticket.ticketCode,
           customerName: attendeeName,
@@ -262,6 +267,14 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         });
         return;
       }
+      if (guestPass.status === "removed") {
+        res.status(400).json({
+          success: false,
+          code: "PASS_REMOVED",
+          message: `NOT ON THE LIST: ${booking?.customerName || "The host"} removed this guest. This pass is no longer valid.`
+        });
+        return;
+      }
       if (guestPass.status === "cancelled") {
         res.status(400).json({
           success: false,
@@ -291,6 +304,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
           success: false,
           code: "ALREADY_CHECKED_IN",
           message: `DUPLICATE ADMISSION: Private guest pass already checked in at ${checkInTime} by ${guestPass.checkedInByName || "Staff"}.`,
+          admission: { kind: "guest_pass", id: String(guestPass._id) },
           ticket: {
             ticketCode: guestPass.passCode,
             customerName: guestPass.guestName,
@@ -312,6 +326,7 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         success: true,
         code: "CHECK_IN_SUCCESS",
         message: `Admission Confirmed! Welcome, ${guestPass.guestName} (Guest of ${booking?.customerName || "Host"}).`,
+        admission: { kind: "guest_pass", id: String(guestPass._id) },
         ticket: {
           ticketCode: guestPass.passCode,
           customerName: guestPass.guestName,
@@ -417,5 +432,137 @@ export const searchTickets = async (req: Request, res: Response, next: NextFunct
     });
   } catch (error: any) {
     next(new Error(`Search failed: ${error.message}`));
+  }
+};
+
+/**
+ * GET /api/check-in/admission/:kind/:id   kind = guest_pass | ticket | group
+ * The admitted person's details for the door "admitted" screen shown after a scan.
+ */
+export const getAdmissionDetails = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const kind = sanitizeString(req.params.kind);
+    const id = sanitizeString(req.params.id);
+    if (!/^[a-f0-9]{24}$/i.test(id)) {
+      res.status(400).json({ success: false, message: "Invalid id" });
+      return;
+    }
+    const isPromoter = req.user?.role === "promoter";
+    const ownsEvent = (promoterId: unknown) => !isPromoter || String(promoterId) === req.user!._id.toString();
+
+    if (kind === "guest_pass") {
+      if (isPromoter) {
+        res.status(403).json({ success: false, message: "Private venue guest passes are handled by venue staff." });
+        return;
+      }
+      const pass = await GuestPass.findById(id)
+        .populate("booking", "customerName customerPhone customerEmail bookingDate bookingTime eventEndTime occasion partySize")
+        .populate("user", "name email phone createdAt isPhoneVerified")
+        .lean();
+      if (!pass) {
+        res.status(404).json({ success: false, message: "Guest pass not found" });
+        return;
+      }
+      const booking = pass.booking as any;
+      const account = pass.user as any;
+      const arrived = booking ? await GuestPass.countDocuments({ booking: booking._id, checkedIn: true, status: { $ne: "removed" } }) : 0;
+      res.status(200).json({
+        success: true,
+        kind,
+        person: {
+          name: pass.guestName,
+          phone: pass.guestPhone || account?.phone || "",
+          email: pass.guestEmail || account?.email || "",
+          memberSince: account?.createdAt || null,
+          phoneVerified: !!account?.isPhoneVerified
+        },
+        pass: { code: pass.passCode, status: pass.status, label: "Party guest" },
+        checkIn: { checkedIn: pass.checkedIn, at: pass.checkedInAt || null, by: pass.checkedInByName || "" },
+        event: booking
+          ? {
+              kind: "celebration",
+              bookingId: String(booking._id),
+              title: `${booking.customerName}'s ${(booking.occasion || "celebration").replace(/_/g, " ")}`,
+              hostName: booking.customerName,
+              hostPhone: booking.customerPhone,
+              date: booking.bookingDate,
+              startTime: booking.bookingTime,
+              endTime: booking.eventEndTime || "",
+              arrived,
+              capacity: booking.partySize || 0
+            }
+          : null
+      });
+      return;
+    }
+
+    if (kind === "ticket") {
+      const ticket = await Ticket.findById(id).populate("event", "title date startTime endTime venueName promoter").lean();
+      if (!ticket || !ownsEvent(ticket.promoter)) {
+        res.status(404).json({ success: false, message: "Ticket not found" });
+        return;
+      }
+      const event = ticket.event as any;
+      const isGuestSeat = !!ticket.holderStatus && !ticket.isBuyerSeat;
+      const arrived = await Ticket.countDocuments({ event: event?._id, checkedIn: true });
+      res.status(200).json({
+        success: true,
+        kind,
+        person: {
+          name: ticket.holderName || ticket.customerName,
+          phone: ticket.holderPhone || ticket.customerPhone || "",
+          email: ticket.holderEmail || ticket.customerEmail || "",
+          memberSince: null,
+          phoneVerified: false
+        },
+        pass: { code: ticket.ticketCode, status: ticket.status, label: isGuestSeat ? `${ticket.tierName} · Guest of ${ticket.customerName}` : ticket.tierName },
+        checkIn: { checkedIn: ticket.checkedIn, at: ticket.checkedInAt || null, by: ticket.checkedInByName || "" },
+        event: event
+          ? {
+              kind: "event",
+              eventId: String(event._id),
+              title: event.title,
+              hostName: isGuestSeat ? ticket.customerName : "",
+              hostPhone: "",
+              date: event.date,
+              startTime: event.startTime,
+              endTime: event.endTime || "",
+              venueName: event.venueName,
+              arrived,
+              capacity: 0
+            }
+          : null
+      });
+      return;
+    }
+
+    if (kind === "group") {
+      const order = await TicketOrder.findById(id).populate("event", "title date startTime endTime venueName").lean();
+      if (!order || !ownsEvent(order.promoter)) {
+        res.status(404).json({ success: false, message: "Order not found" });
+        return;
+      }
+      const event = order.event as any;
+      const tickets = await Ticket.find({ order: order._id, status: { $in: ["valid", "used"] } })
+        .select("tierName checkedIn checkedInAt checkedInByName holderName")
+        .lean();
+      const last = tickets.reduce<Date | null>((d, t) => (t.checkedInAt && (!d || t.checkedInAt > d) ? t.checkedInAt : d), null);
+      res.status(200).json({
+        success: true,
+        kind,
+        person: { name: order.customerName, phone: order.customerPhone || "", email: order.customerEmail || "", memberSince: null, phoneVerified: false },
+        pass: { code: order.orderNumber, status: order.status, label: `Group pass · ${tickets.length} people` },
+        checkIn: { checkedIn: tickets.every((t) => t.checkedIn), at: last, by: tickets.find((t) => t.checkedInAt?.getTime() === last?.getTime())?.checkedInByName || "" },
+        group: { size: tickets.length, inside: tickets.filter((t) => t.checkedIn).length },
+        event: event
+          ? { kind: "event", eventId: String(event._id), title: event.title, hostName: "", hostPhone: "", date: event.date, startTime: event.startTime, endTime: event.endTime || "", venueName: event.venueName, arrived: 0, capacity: 0 }
+          : null
+      });
+      return;
+    }
+
+    res.status(400).json({ success: false, message: "Unknown admission type" });
+  } catch (error: any) {
+    next(new Error(`Failed to load admission details: ${error.message}`));
   }
 };

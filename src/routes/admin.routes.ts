@@ -31,7 +31,7 @@ import {
   updateBookingDetails,
   updateUser
 } from "../controllers/admin.controller";
-import { getAdminBookingOverview } from "../controllers/guestPass.controller";
+import { getAdminBookingOverview, getAdminCelebrations } from "../controllers/guestPass.controller";
 import { getDataCenter, exportDataCenter } from "../controllers/dataCenter.controller";
 import { updateBookingMenu, rescheduleBooking } from "../controllers/booking";
 import adminOnly, { staffOrAdminOnly } from "../middleware/admin.middleware";
@@ -74,6 +74,7 @@ router.get("/settings/pricing", getSystemSettings);
 router.patch("/settings/pricing", adminOnly, updateSystemSettings);
 
 router.get("/bookings/:id/overview", getAdminBookingOverview);
+router.get("/celebrations", getAdminCelebrations);
 
 // Data Center: customer contacts for marketing (admin / owner only)
 router.get("/data-center", adminOnly, getDataCenter);

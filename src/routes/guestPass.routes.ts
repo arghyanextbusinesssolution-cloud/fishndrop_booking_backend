@@ -7,7 +7,8 @@ import {
   getGuestPassByQrToken,
   getMyCelebrations,
   getMyInvites,
-  cancelMyGuestPass
+  cancelMyGuestPass,
+  removeGuestPass
 } from "../controllers/guestPass.controller";
 import authMiddleware from "../middleware/auth.middleware";
 
@@ -26,6 +27,7 @@ router.post("/:token/cancel", authMiddleware, cancelMyGuestPass);
 // Host protected management
 router.get("/booking/:bookingId/guests", authMiddleware, getBookingGuestPasses);
 router.patch("/passes/:passId/status", authMiddleware, updateGuestPassStatus);
+router.delete("/passes/:passId", authMiddleware, removeGuestPass);
 
 export default router;
 

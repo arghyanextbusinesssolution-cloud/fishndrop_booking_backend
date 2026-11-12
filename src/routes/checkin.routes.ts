@@ -1,5 +1,5 @@
 import express from "express";
-import { scanTicket, searchTickets } from "../controllers/checkin.controller";
+import { scanTicket, searchTickets, getAdmissionDetails } from "../controllers/checkin.controller";
 import authMiddleware from "../middleware/auth.middleware";
 import { NextFunction, Request, Response } from "express";
 
@@ -16,6 +16,7 @@ const doorRoles = (req: Request, res: Response, next: NextFunction): void => {
 router.use(authMiddleware, doorRoles);
 router.post("/scan", scanTicket);
 router.get("/search", searchTickets);
+router.get("/admission/:kind/:id", getAdmissionDetails);
 
 export default router;
 

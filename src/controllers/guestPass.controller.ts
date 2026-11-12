@@ -330,7 +330,7 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
 
     const guestPasses = await GuestPass.find({ booking: booking._id }).sort({ createdAt: -1 });
 
-    const checkedInCount = guestPasses.filter((g) => g.checkedIn).length;
+    const checkedInCount = guestPasses.filter((g) => g.checkedIn && g.status !== "removed").length;
     const approvedCount = guestPasses.filter((g) => g.status === "approved").length;
 
     const baseUrl = getFrontendBaseUrl();
@@ -399,12 +399,69 @@ export const updateGuestPassStatus = async (req: Request, res: Response, next: N
       return;
     }
 
+    // Adding a removed / rejected guest back takes a spot, so respect the paid guest count
+    if (status === "approved" && !["approved", "pending_approval"].includes(pass.status)) {
+      const active = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
+      if (active >= booking.partySize) {
+        res.status(403).json({ success: false, code: "CAPACITY_REACHED", message: `The guest list is full (${booking.partySize} guests).` });
+        return;
+      }
+      pass.removedAt = undefined;
+    }
+
     pass.status = status;
     await pass.save();
 
     res.status(200).json({ success: true, message: `Pass ${status} successfully`, pass });
   } catch (error: any) {
     next(new Error(`Failed to update pass: ${error.message}`));
+  }
+};
+
+/**
+ * DELETE /api/invitations/passes/:passId
+ * Host (or venue staff) removes a guest from the list, even after they checked in. Their QR stops working right away
+ * (the token is rotated, so the old pass link no longer opens) and the spot frees up.
+ * The record is kept as "removed" so the same person can't simply rejoin from the invite link.
+ */
+export const removeGuestPass = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({ success: false, message: "Unauthorized" });
+      return;
+    }
+    const pass = await GuestPass.findById(sanitizeString(req.params.passId)).populate("booking");
+    if (!pass) {
+      res.status(404).json({ success: false, message: "Guest pass not found" });
+      return;
+    }
+    const booking = pass.booking as any;
+    const isOwner = booking?.user?.toString() === req.user._id.toString();
+    const isStaff = ["admin", "owner", "staff"].includes(req.user.role);
+    if (!isOwner && !isStaff) {
+      res.status(403).json({ success: false, message: "Only the host can remove guests" });
+      return;
+    }
+    if (!["approved", "pending_approval"].includes(pass.status)) {
+      res.status(409).json({ success: false, message: "This guest isn't on the list anymore." });
+      return;
+    }
+
+    // Atomic: a door scan at the same moment either admits first or sees the pass as removed
+    const updated = await GuestPass.findOneAndUpdate(
+      { _id: pass._id, status: { $in: ["approved", "pending_approval"] } },
+      { $set: { status: "removed", removedAt: new Date(), qrCodeToken: generateGuestQrToken() } },
+      { returnDocument: "after" }
+    );
+    if (!updated) {
+      res.status(409).json({ success: false, message: "This guest just changed. Please refresh." });
+      return;
+    }
+
+    logger.info(`Guest ${updated.guestName} (${updated.passCode}) removed from booking #${booking._id} by ${req.user.name || req.user._id}`);
+    res.status(200).json({ success: true, message: `${updated.guestName} was removed. Their QR pass no longer works.`, pass: updated });
+  } catch (error: any) {
+    next(new Error(`Failed to remove guest: ${error.message}`));
   }
 };
 
@@ -476,7 +533,7 @@ export const getMyCelebrations = async (req: Request, res: Response, next: NextF
           _id: "$booking",
           registered: { $sum: { $cond: [{ $in: ["$status", ["approved", "pending_approval"]] }, 1, 0] } },
           pending: { $sum: { $cond: [{ $eq: ["$status", "pending_approval"] }, 1, 0] } },
-          checkedIn: { $sum: { $cond: ["$checkedIn", 1, 0] } }
+          checkedIn: { $sum: { $cond: [{ $and: ["$checkedIn", { $ne: ["$status", "removed"] }] }, 1, 0] } }
         }
       }
     ]);
@@ -526,7 +583,7 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
     const or: any[] = [{ user: req.user._id }];
     if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
 
-    const passes = await GuestPass.find({ $or: or, status: { $nin: ["rejected", "cancelled"] } })
+    const passes = await GuestPass.find({ $or: or, status: { $nin: ["rejected", "cancelled", "removed"] } })
       .populate("booking", "customerName occasion bookingDate bookingTime eventEndTime durationHours status invitationToken user")
       .sort({ createdAt: -1 })
       .limit(100)
@@ -555,6 +612,89 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
     res.status(200).json({ success: true, invites });
   } catch (error: any) {
     next(new Error(`Failed to load your invitations: ${error.message}`));
+  }
+};
+
+/** Today's calendar date in New York, as the UTC-midnight Date bookings are stored with. */
+const venueToday = (): Date => {
+  const ymd = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  return new Date(`${ymd}T00:00:00.000Z`);
+};
+
+/**
+ * GET /api/admin/celebrations?when=today|upcoming|past|all&q=   (admin / owner / staff)
+ * Every private venue celebration with guest-list and door check-in numbers.
+ */
+export const getAdminCelebrations = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const when = sanitizeString(req.query.when) || "upcoming";
+    const q = sanitizeString(req.query.q);
+    const today = venueToday();
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+
+    const filter: any = { bookingType: "private_event", status: { $ne: "cancelled" } };
+    if (when === "today") filter.bookingDate = { $gte: today, $lt: tomorrow };
+    else if (when === "upcoming") filter.bookingDate = { $gte: today };
+    else if (when === "past") filter.bookingDate = { $lt: today };
+    if (q) {
+      const rx = { $regex: q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), $options: "i" };
+      filter.$or = [{ customerName: rx }, { customerEmail: rx }, { customerPhone: rx }, { occasion: rx }];
+    }
+
+    const bookings = await Booking.find(filter)
+      .select("customerName customerPhone customerEmail bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus")
+      .sort({ bookingDate: when === "past" ? -1 : 1, bookingTime: 1 })
+      .limit(200)
+      .lean();
+
+    const ids = bookings.map((b) => b._id);
+    const counts = await GuestPass.aggregate([
+      { $match: { booking: { $in: ids } } },
+      {
+        $group: {
+          _id: "$booking",
+          registered: { $sum: { $cond: [{ $in: ["$status", ["approved", "pending_approval"]] }, 1, 0] } },
+          pending: { $sum: { $cond: [{ $eq: ["$status", "pending_approval"] }, 1, 0] } },
+          checkedIn: { $sum: { $cond: [{ $and: ["$checkedIn", { $ne: ["$status", "removed"] }] }, 1, 0] } },
+          lastCheckInAt: { $max: { $cond: [{ $ne: ["$status", "removed"] }, "$checkedInAt", null] } }
+        }
+      }
+    ]);
+    const byId = new Map(counts.map((c: any) => [String(c._id), c]));
+
+    const celebrations = bookings.map((b: any) => {
+      const c = byId.get(String(b._id)) || { registered: 0, pending: 0, checkedIn: 0, lastCheckInAt: null };
+      return {
+        _id: b._id,
+        hostName: b.customerName,
+        hostPhone: b.customerPhone,
+        hostEmail: b.customerEmail,
+        date: b.bookingDate,
+        startTime: b.bookingTime,
+        endTime: b.eventEndTime || "",
+        occasion: b.occasion || "celebration",
+        status: b.status,
+        paymentStatus: b.paymentStatus,
+        capacity: b.partySize || 0,
+        registered: c.registered,
+        pendingApproval: c.pending,
+        checkedIn: c.checkedIn,
+        lastCheckInAt: c.lastCheckInAt
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      celebrations,
+      totals: {
+        parties: celebrations.length,
+        capacity: celebrations.reduce((n, c) => n + c.capacity, 0),
+        registered: celebrations.reduce((n, c) => n + c.registered, 0),
+        checkedIn: celebrations.reduce((n, c) => n + c.checkedIn, 0)
+      }
+    });
+  } catch (error: any) {
+    next(new Error(`Failed to load celebrations: ${error.message}`));
   }
 };
 
@@ -588,7 +728,7 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
     const pending = passes.filter((p) => p.status === "pending_approval");
     const rejected = passes.filter((p) => p.status === "rejected");
     const cancelled = passes.filter((p) => p.status === "cancelled");
-    const arrived = passes.filter((p) => p.checkedIn);
+    const arrived = passes.filter((p) => p.checkedIn && p.status !== "removed");
     const signedUp = approved.length + pending.length;
     const capacity = booking.partySize || 0;
 
