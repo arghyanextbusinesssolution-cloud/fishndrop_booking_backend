@@ -160,6 +160,7 @@ export interface IBooking extends Document {
   utmContent?: string;
   utmTerm?: string;
   fbclid?: string;
+  ttclid?: string; // TikTok click id
   fbc?: string;
   fbp?: string;
   referralUrl?: string;
@@ -419,6 +420,7 @@ const bookingSchema = new Schema<IBooking>(
     utmContent: { type: String },
     utmTerm: { type: String },
     fbclid: { type: String },
+    ttclid: { type: String },
     fbc: { type: String },
     fbp: { type: String },
     referralUrl: { type: String },
@@ -446,6 +448,63 @@ bookingSchema.post("save", function (doc) {
   // Lazy require: the sync service imports this model
   const { syncBookingToCalendar } = require("../services/calendarSync.service");
   void syncBookingToCalendar(doc);
+});
+
+// ── GHL booking sync: send the full booking snapshot to the GHL "booking sync" webhook whenever a
+// completed booking (confirmed, or deposit/full payment made) is created or its data changes.
+// Feeds GHL Conversation AI so it can answer Instagram / TikTok chats about the booking.
+const GHL_SYNC_FIELDS = [
+  "status", "paymentStatus", "totalAmount", "remainingAmount", "depositAmount", "remainingPaymentStatus",
+  "paymentMethod", "zelleVerificationStatus", "remainingZelleVerificationStatus", "bookingDate", "bookingTime",
+  "durationHours", "partySize", "customerName", "customerEmail", "customerPhone", "occasion", "notes",
+  "needDj", "needPhotographer", "photographerHours", "cateringMenu", "dishQuantities", "complimentaryDrinks",
+  "tables", "offerPrice", "foodPaymentStatus", "cancellationReason", "eventTitle"
+];
+const PAYMENT_FIELDS = ["paymentStatus", "totalAmount", "remainingAmount", "depositAmount", "remainingPaymentStatus", "paymentMethod", "zelleVerificationStatus", "remainingZelleVerificationStatus", "foodPaymentStatus"];
+const BLOCKING_FIELDS = ["status", "paymentStatus", "bookingDate", "bookingTime", "durationHours"];
+const isComplete = (status?: string, paymentStatus?: string) =>
+  status !== "cancelled" && (status === "confirmed" || paymentStatus === "deposit_paid" || paymentStatus === "paid");
+
+bookingSchema.post("init", function () {
+  this.$locals.origStatus = this.status;
+  this.$locals.origPaymentStatus = this.paymentStatus;
+});
+bookingSchema.pre("save", function () {
+  const changed = this.isNew ? [] : GHL_SYNC_FIELDS.filter((f) => this.isModified(f));
+  const wasComplete = !this.isNew && isComplete(this.$locals.origStatus as string, this.$locals.origPaymentStatus as string);
+  const nowComplete = isComplete(this.status, this.paymentStatus);
+  const wasCancelled = this.$locals.origStatus === "cancelled";
+
+  let changeType: string | null = null;
+  if (this.status === "cancelled") {
+    if (!wasCancelled && wasComplete) changeType = "cancelled";
+  } else if (nowComplete && !wasComplete) {
+    changeType = "new";
+  } else if (nowComplete && changed.length) {
+    changeType = changed.some((f) => ["bookingDate", "bookingTime"].includes(f))
+      ? "rescheduled"
+      : changed.some((f) => PAYMENT_FIELDS.includes(f))
+      ? "payment_updated"
+      : "updated";
+  }
+  this.$locals.ghlSync = changeType ? { changeType, changedFields: changed } : null;
+  this.$locals.availabilityDirty =
+    this.bookingType === "private_event" && (this.isNew || BLOCKING_FIELDS.some((f) => this.isModified(f)));
+});
+bookingSchema.post("save", function (doc) {
+  // Next comparison is against what was just saved
+  doc.$locals.origStatus = doc.status;
+  doc.$locals.origPaymentStatus = doc.paymentStatus;
+  const sync = doc.$locals.ghlSync as any;
+  doc.$locals.ghlSync = null;
+  if (sync) {
+    const { sendGHLBookingSyncEvent } = require("../integrations/ghl/triggers/booking/bookingSync.trigger");
+    void sendGHLBookingSyncEvent(doc, sync);
+  }
+  if (doc.$locals.availabilityDirty) {
+    const { scheduleAvailabilitySync } = require("../integrations/ghl/triggers/availability/availabilityUpdated.trigger");
+    scheduleAvailabilitySync("private_booking_changed");
+  }
 });
 
 // ── Google Calendar: any hard delete (single, bulk, by id) removes the calendar entry too

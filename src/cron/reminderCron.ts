@@ -12,6 +12,7 @@ import {
 import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
 import { reconcileCalendar } from "../services/calendarSync.service";
 import { isGoogleCalendarEnabled } from "../services/googleCalendar.service";
+import { scheduleAvailabilitySync } from "../integrations/ghl/triggers/availability/availabilityUpdated.trigger";
 
 export const startReminderCron = () => {
     logger.info("Initializing 72-hour email reminder & 15-min unpaid booking cleanup cron jobs...");
@@ -22,6 +23,9 @@ export const startReminderCron = () => {
     });
     isGoogleCalendarEnabled(); // prints "✓ Enabled → calendar …" or "✗ Sync SKIPPED — …" at boot
     setTimeout(() => void reconcileCalendar(), 15_000); // initial backfill shortly after boot
+
+    // GHL AI: re-publish the next-90-days blocked slots daily (6 AM NY) so the window rolls forward
+    cron.schedule("0 6 * * *", () => scheduleAvailabilitySync("daily_refresh"), { timezone: "America/New_York" });
 
     // Auto-cleanup unpaid pending draft bookings every 2 minutes
     cron.schedule("*/2 * * * *", async () => {

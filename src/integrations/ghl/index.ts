@@ -19,6 +19,14 @@ export { sendGHLMediaUploadEvent } from "./triggers/booking/guestMediaUploaded.t
 export { sendGHLZellePendingEvent } from "./triggers/booking/zellePaymentSubmitted.trigger";
 export { sendGHLZelleConfirmedEvent } from "./triggers/booking/zellePaymentConfirmed.trigger";
 
+// Booking snapshot + venue availability for GHL Conversation AI (fired automatically by model hooks)
+export { sendGHLBookingSyncEvent, buildAiBookingSummary } from "./triggers/booking/bookingSync.trigger";
+export {
+  sendGHLAvailabilityEvent,
+  scheduleAvailabilitySync,
+  buildAvailabilitySnapshot
+} from "./triggers/availability/availabilityUpdated.trigger";
+
 // Promoters
 export { sendGHLPromoterRegisteredEvent } from "./triggers/promoter/promoterRegistered.trigger";
 export {

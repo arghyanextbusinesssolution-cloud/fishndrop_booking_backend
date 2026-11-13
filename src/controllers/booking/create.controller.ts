@@ -64,6 +64,7 @@ export const createBooking = async (req: Request, res: Response, next: NextFunct
       utmContent: sanitizeString(req.body.utmContent || req.body.utm_content),
       utmTerm: sanitizeString(req.body.utmTerm || req.body.utm_term),
       fbclid: sanitizeString(req.body.fbclid),
+      ttclid: sanitizeString(req.body.ttclid),
       fbc: sanitizeString(req.body.fbc),
       fbp: sanitizeString(req.body.fbp),
       referralUrl: sanitizeString(req.body.referralUrl || req.body.landingPage)
@@ -176,6 +177,7 @@ export const createBookingWithAccount = async (req: Request, res: Response, next
       utmContent: sanitizeString(req.body.utmContent || req.body.utm_content),
       utmTerm: sanitizeString(req.body.utmTerm || req.body.utm_term),
       fbclid: sanitizeString(req.body.fbclid),
+      ttclid: sanitizeString(req.body.ttclid),
       fbc: sanitizeString(req.body.fbc),
       fbp: sanitizeString(req.body.fbp),
       referralUrl: sanitizeString(req.body.referralUrl || req.body.landingPage)

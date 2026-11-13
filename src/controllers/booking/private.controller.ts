@@ -216,6 +216,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     const utmContent = sanitizeString(req.body.utmContent || req.body.utm_content);
     const utmTerm = sanitizeString(req.body.utmTerm || req.body.utm_term);
     const fbclid = sanitizeString(req.body.fbclid);
+    const ttclid = sanitizeString(req.body.ttclid);
     const fbc = sanitizeString(req.body.fbc);
     const fbp = sanitizeString(req.body.fbp);
     const referralUrl = sanitizeString(req.body.referralUrl || req.body.landingPage);
@@ -268,6 +269,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       utmContent,
       utmTerm,
       fbclid,
+      ttclid,
       fbc,
       fbp,
       referralUrl,

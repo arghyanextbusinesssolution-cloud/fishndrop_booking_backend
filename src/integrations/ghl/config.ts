@@ -17,7 +17,8 @@ export type GHLWebhookKey =
   | "employeeAccount"
   | "promoterEventCreated"
   | "eventApproved"
-  | "ticketPurchased";
+  | "ticketPurchased"
+  | "bookingSync";
 
 interface WebhookDefinition {
   envVars: string[];
@@ -64,6 +65,11 @@ const WEBHOOKS: Record<GHLWebhookKey, WebhookDefinition> = {
   ticketPurchased: {
     envVars: ["GHL_TICKET_PURCHASED_WEBHOOK_URL"],
     fallback: `${HOOK_BASE}/d6176daa-d234-4e50-adaf-5287d8d77eba`
+  },
+  // Full booking snapshot on every change + venue availability (feeds GHL Conversation AI for IG/TikTok chats)
+  bookingSync: {
+    envVars: ["GHL_BOOKING_SYNC_WEBHOOK_URL"],
+    fallback: `${HOOK_BASE}/d26300bb-d62f-4d63-a92e-306b1855e4a6`
   }
 };
 

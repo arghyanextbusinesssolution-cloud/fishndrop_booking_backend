@@ -34,6 +34,7 @@ export interface BookingPayload {
   utmContent?: string;
   utmTerm?: string;
   fbclid?: string;
+  ttclid?: string;
   fbc?: string;
   fbp?: string;
   referralUrl?: string;
@@ -125,6 +126,7 @@ export const reserveTablesAndCreateBooking = async (payload: BookingPayload) => 
     utmContent: payload.utmContent,
     utmTerm: payload.utmTerm,
     fbclid: payload.fbclid,
+    ttclid: payload.ttclid,
     fbc: payload.fbc,
     fbp: payload.fbp,
     referralUrl: payload.referralUrl

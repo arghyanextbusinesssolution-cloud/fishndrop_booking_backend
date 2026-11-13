@@ -1825,6 +1825,97 @@ export const updateBookingDetails = async (req: Request, res: Response, next: Ne
     }
     if (req.body.notes !== undefined) booking.notes = sanitizeString(req.body.notes).slice(0, 3000);
 
+    // ── Status, add-ons and money (admin / owner only for money + status) ──
+    const isAdmin = ["admin", "owner"].includes(String(req.user?.role));
+    const wantsMoneyOrStatus = ["status", "totalAmount", "amountPaid", "paymentMethod"].some((k) => req.body[k] !== undefined);
+    if (wantsMoneyOrStatus && !isAdmin) {
+      res.status(403).json({ success: false, message: "Only an admin or the owner can change amounts, payment or status" });
+      return;
+    }
+
+    if (req.body.status !== undefined) {
+      const status = sanitizeString(req.body.status);
+      if (!["pending", "confirmed", "cancelled"].includes(status)) {
+        res.status(400).json({ success: false, message: "Status must be pending, confirmed or cancelled" });
+        return;
+      }
+      booking.status = status as any;
+    }
+
+    if (req.body.needDj !== undefined) booking.needDj = Boolean(req.body.needDj);
+    if (req.body.needPhotographer !== undefined) booking.needPhotographer = Boolean(req.body.needPhotographer);
+    if (req.body.photographerHours !== undefined) {
+      const hrs = Number(req.body.photographerHours);
+      if (!Number.isFinite(hrs) || hrs < 0 || hrs > 12) {
+        res.status(400).json({ success: false, message: "Photographer hours must be between 0 and 12" });
+        return;
+      }
+      booking.photographerHours = hrs;
+    }
+    if (req.body.cateringMenu !== undefined) booking.cateringMenu = sanitizeString(req.body.cateringMenu) || "none";
+    if (req.body.complimentaryDrinks !== undefined) {
+      const drinks = Number(req.body.complimentaryDrinks);
+      if (!Number.isInteger(drinks) || drinks < 0 || drinks > 5000) {
+        res.status(400).json({ success: false, message: "Complimentary drinks must be a whole number of 0 or more" });
+        return;
+      }
+      booking.complimentaryDrinks = drinks;
+    }
+
+    const PAY_METHODS = ["card", "zelle", "cash", "bank_transfer", "other"];
+    if (req.body.paymentMethod !== undefined) {
+      const method = sanitizeString(req.body.paymentMethod);
+      if (!PAY_METHODS.includes(method)) {
+        res.status(400).json({ success: false, message: "Unknown payment method" });
+        return;
+      }
+      booking.paymentMethod = method as any;
+    }
+
+    if (req.body.totalAmount !== undefined || req.body.amountPaid !== undefined) {
+      const total = req.body.totalAmount !== undefined ? Number(req.body.totalAmount) : booking.totalAmount || 0;
+      const prevPaid = Math.max(0, (booking.totalAmount || 0) - (booking.remainingAmount || 0));
+      const paidNow = req.body.amountPaid !== undefined ? Number(req.body.amountPaid) : prevPaid;
+      if (!Number.isFinite(total) || total < 0 || total > 1_000_000) {
+        res.status(400).json({ success: false, message: "Total must be a positive amount" });
+        return;
+      }
+      if (!Number.isFinite(paidNow) || paidNow < 0 || paidNow > total) {
+        res.status(400).json({ success: false, message: "Amount paid must be between 0 and the total" });
+        return;
+      }
+      const round = (n: number) => Math.round(n * 100) / 100;
+      const remaining = round(total - paidNow);
+
+      booking.totalAmount = round(total);
+      booking.contractedAmount = round(total);
+      booking.remainingAmount = remaining;
+      booking.collectedAmount = round(paidNow);
+      booking.outstandingBalance = remaining;
+      if (booking.bookingType === "private_event" && req.body.amountPaid !== undefined && (!booking.depositAmount || paidNow < booking.depositAmount)) {
+        booking.depositAmount = round(paidNow);
+      }
+      booking.remainingPaymentStatus = remaining <= 0 ? "paid" : "unpaid";
+      booking.paymentStatus = remaining <= 0 && total > 0 ? "paid" : paidNow > 0 ? "deposit_paid" : "pending_payment";
+
+      // Keep an audit line in the payment breakdown when the collected amount changes
+      const diff = round(paidNow - prevPaid);
+      if (diff !== 0) {
+        booking.paymentBreakdown = booking.paymentBreakdown || [];
+        booking.paymentBreakdown.push({
+          amount: diff,
+          paymentMethod: (booking.paymentMethod || "other") as any,
+          paymentType: "manual",
+          status: "verified",
+          transactionId: "",
+          proofUrl: "",
+          iterationIndex: booking.paymentBreakdown.length + 1,
+          notes: `Admin adjustment by ${req.user?.email || "admin"}${req.body.paymentNote ? `: ${sanitizeString(req.body.paymentNote).slice(0, 300)}` : ""}`,
+          paidAt: new Date()
+        });
+      }
+    }
+
     // Optionally copy the contact changes onto the customer's account too
     let accountUpdated = false;
     if (req.body.updateAccount && booking.user && Object.keys(contact).length) {

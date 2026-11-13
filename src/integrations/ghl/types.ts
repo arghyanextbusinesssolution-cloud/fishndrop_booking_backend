@@ -7,7 +7,8 @@ export type BookingEventName =
   | "booking_rescheduled"
   | "guest_media_uploaded"
   | "zelle_payment_submitted"
-  | "zelle_payment_confirmed";
+  | "zelle_payment_confirmed"
+  | "booking_sync";
 
 export type BookingLeadStatus = "lead" | "booking" | "canceled" | "rescheduled";
 
@@ -18,7 +19,8 @@ export type BookingGHLTag =
   | "Booking Rescheduled"
   | "Media Uploaded"
   | "Zelle Payment Pending"
-  | "Zelle Payment Confirmed";
+  | "Zelle Payment Confirmed"
+  | "Booking Updated";
 
 export interface MediaDetails {
   mediaUrls?: string[];

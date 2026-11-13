@@ -80,7 +80,8 @@ export const buildBookingPayload = (booking: any, options: GHLPayloadOptions) =>
     utmCampaign: booking.utmCampaign || "",
     utmContent: booking.utmContent || "",
     utmTerm: booking.utmTerm || "",
-    fbclid: booking.fbclid || ""
+    fbclid: booking.fbclid || "",
+    ttclid: booking.ttclid || ""
   };
 
   const totalAmount = Number(booking.totalAmount || 0);
@@ -142,6 +143,7 @@ export const buildBookingPayload = (booking: any, options: GHLPayloadOptions) =>
     utm_content: utm.utmContent,
     utmTerm: utm.utmTerm,
     fbclid: utm.fbclid,
+    ttclid: utm.ttclid,
     isRescheduled,
     previousBookingDate,
     previousBookingTime,
@@ -253,6 +255,7 @@ export const buildBookingPayload = (booking: any, options: GHLPayloadOptions) =>
     utm_content: utm.utmContent,
     utmTerm: utm.utmTerm,
     fbclid: utm.fbclid,
+    ttclid: utm.ttclid,
     fbc: booking.fbc || "",
     fbp: booking.fbp || "",
     referralUrl: booking.referralUrl || "",
