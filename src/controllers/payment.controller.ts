@@ -11,7 +11,7 @@ import Booking from "../models/Booking";
  * The browser check and the Stripe webhook can both confirm the same deposit at the same moment.
  * Only the first one to claim it sends the confirmation emails + GHL booking_confirmed.
  */
-const claimFirstConfirmation = async (bookingId: any): Promise<boolean> => {
+export const claimFirstConfirmation = async (bookingId: any): Promise<boolean> => {
   const r = await Booking.updateOne(
     { _id: bookingId, ghlConfirmedSentAt: { $exists: false } },
     { $set: { ghlConfirmedSentAt: new Date() } }
@@ -92,7 +92,7 @@ function readStripeSecretKey(): string | undefined {
   return undefined;
 }
 
-function getStripe(): StripeClient | null {
+export function getStripe(): StripeClient | null {
   const key = readStripeSecretKey();
   if (!key) {
     return null;
@@ -103,7 +103,7 @@ function getStripe(): StripeClient | null {
   return stripeClient;
 }
 
-function computeChargeAmount(amountInDollars: number): number {
+export function computeChargeAmount(amountInDollars: number): number {
   const secretKey = readStripeSecretKey();
   const rawEnv = (process.env.STRIPE_TEST_ONE_DOLLAR_PAYMENT || "").trim().toLowerCase();
 

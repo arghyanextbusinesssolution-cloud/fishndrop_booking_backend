@@ -161,6 +161,9 @@ export interface IBooking extends Document {
   utmTerm?: string;
   fbclid?: string;
   ttclid?: string; // TikTok click id
+  aiContactId?: string; // GHL contact that booked through the Instagram/Facebook AI assistant
+  aiStripeSessionId?: string;
+  aiHoldExpiresAt?: Date; // slot stays held until this time while the customer pays the deposit link
   fbc?: string;
   fbp?: string;
   referralUrl?: string;
@@ -421,6 +424,9 @@ const bookingSchema = new Schema<IBooking>(
     utmTerm: { type: String },
     fbclid: { type: String },
     ttclid: { type: String },
+    aiContactId: { type: String, index: true, sparse: true },
+    aiStripeSessionId: { type: String },
+    aiHoldExpiresAt: { type: Date },
     fbc: { type: String },
     fbp: { type: String },
     referralUrl: { type: String },

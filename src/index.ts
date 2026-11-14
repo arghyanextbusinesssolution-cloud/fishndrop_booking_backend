@@ -23,6 +23,7 @@ import ticketRoutes from "./routes/ticket.routes";
 import checkinRoutes from "./routes/checkin.routes";
 import guestPassRoutes from "./routes/guestPass.routes";
 import placesRoutes from "./routes/places.routes";
+import aiRoutes from "./routes/ai.routes";
 import Booking from "./models/Booking";
 import SlotLock from "./models/SlotLock";
 import { sendRemainingBalanceReminderViaEmailJS, sendRemainingBalanceCancellationViaEmailJS } from "./utils/email.utils";
@@ -99,6 +100,9 @@ app.use((req, res, next) => {
   logger.info(`[REQUEST] ${req.method} ${req.url}`);
   next();
 });
+
+// AI booking assistant (GHL DMs) — own rate limit + body parser, so it sits before the global limiter
+app.use("/api/ai", aiRoutes);
 
 app.use(globalRateLimiter);
 app.use(timeoutMiddleware);

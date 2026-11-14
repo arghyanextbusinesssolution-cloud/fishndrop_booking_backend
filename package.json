@@ -10,7 +10,8 @@
     "lint": "tsc --noEmit",
     "create-admin": "ts-node src/scripts/createAdmin.ts",
     "clear-slots": "ts-node src/scripts/clearBookingSlots.ts",
-    "sync-ghl": "ts-node src/scripts/syncBookingsToGHL.ts"
+    "sync-ghl": "ts-node src/scripts/syncBookingsToGHL.ts",
+    "ai-test": "ts-node src/scripts/testAiAssistant.ts"
   },
   "keywords": [],
   "author": "",

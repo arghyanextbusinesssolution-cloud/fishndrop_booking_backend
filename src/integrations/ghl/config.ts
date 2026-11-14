@@ -18,7 +18,9 @@ export type GHLWebhookKey =
   | "promoterEventCreated"
   | "eventApproved"
   | "ticketPurchased"
-  | "bookingSync";
+  | "bookingSync"
+  | "aiReply"
+  | "aiHandoff";
 
 interface WebhookDefinition {
   envVars: string[];
@@ -70,6 +72,16 @@ const WEBHOOKS: Record<GHLWebhookKey, WebhookDefinition> = {
   bookingSync: {
     envVars: ["GHL_BOOKING_SYNC_WEBHOOK_URL"],
     fallback: `${HOOK_BASE}/d26300bb-d62f-4d63-a92e-306b1855e4a6`
+  },
+  // AI booking assistant reply → GHL workflow sends it to the customer's Instagram / Facebook DM
+  aiReply: {
+    envVars: ["GHL_AI_REPLY_WEBHOOK_URL"],
+    fallback: `${HOOK_BASE}/5bd6e536-98a1-401e-ac09-489e4eabc593`
+  },
+  // AI assistant → staff: human / call-back requests (action "human_call_requested"), same webhook as AI replies
+  aiHandoff: {
+    envVars: ["GHL_AI_HANDOFF_WEBHOOK_URL"],
+    fallback: `${HOOK_BASE}/5bd6e536-98a1-401e-ac09-489e4eabc593`
   }
 };
 

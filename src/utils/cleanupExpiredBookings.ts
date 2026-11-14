@@ -53,6 +53,8 @@ export const cleanupExpiredPendingBookings = async (): Promise<number> => {
       status: "pending",
       paymentStatus: "pending_payment",
       createdAt: { $lt: cutoff },
+      // AI DM bookings keep their slot until the Stripe payment link expires
+      $and: [{ $or: [{ aiHoldExpiresAt: { $exists: false } }, { aiHoldExpiresAt: null }, { aiHoldExpiresAt: { $lt: new Date() } }] }],
       $or: [
         { paymentMethod: "card" },
         // Zelle with no screenshot submitted (any verification status, including older drafts
