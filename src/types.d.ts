@@ -2,7 +2,7 @@ import { Types } from "mongoose";
 
 export interface UserPayload {
   id: string;
-  role: "user" | "admin" | "owner" | "staff" | "promoter";
+  role: "user" | "admin" | "owner" | "staff" | "promoter" | "seo";
   email?: string;
   name?: string;
   phone?: string;

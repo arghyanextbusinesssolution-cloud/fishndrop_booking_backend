@@ -21,4 +21,14 @@ export const staffOrAdminOnly = (req: Request, res: Response, next: NextFunction
   next();
 };
 
+/** Blog module: admin/owner, plus the SEO team (role "seo") who can ONLY manage blogs. */
+export const blogEditorOnly = (req: Request, res: Response, next: NextFunction): void => {
+  const role = req.user?.role;
+  if (role !== "admin" && role !== "owner" && role !== "seo") {
+    res.status(403).json({ success: false, message: "Forbidden: blog editor access required." });
+    return;
+  }
+  next();
+};
+
 export default adminOnly;
