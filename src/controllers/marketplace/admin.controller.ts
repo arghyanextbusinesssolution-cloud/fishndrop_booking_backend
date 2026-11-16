@@ -4,6 +4,7 @@ import { v2 as cloudinary } from "cloudinary";
 import PartnerVenue, { ADMIN_ONLY_FIELDS, DEFAULT_VENUE_THEME, IPartnerVenue } from "../../models/PartnerVenue";
 import MarketplaceBooking from "../../models/MarketplaceBooking";
 import User from "../../models/User";
+import VenueBlock from "../../models/VenueBlock";
 import logger from "../../config/logger";
 import { computeBreakdown, regularPriceFor } from "../../services/marketplace/pricing.service";
 import { sendVenueOwnerCredentialsEmail } from "../../services/marketplace/notifications.service";
@@ -363,6 +364,38 @@ export const resetVenueOwnerPassword = async (req: Request, res: Response, next:
       isReset: true
     });
     res.status(200).json({ success: true, message: `New login details emailed to ${user.email}`, credentials: { email: user.email, password } });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/admin/marketplace/venues/:id   (admin / owner only)
+ * Permanently removes the venue profile, the owner's login, and the venue's bookings + calendar blocks.
+ */
+export const deletePartnerVenue = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const venue = await PartnerVenue.findById(req.params.id);
+    if (!venue) {
+      res.status(404).json({ success: false, message: "Venue not found" });
+      return;
+    }
+    const [bookings, blocks] = await Promise.all([
+      MarketplaceBooking.deleteMany({ venue: venue._id }),
+      VenueBlock.deleteMany({ venue: venue._id })
+    ]);
+    // Remove the owner login (by link and by the venue back-reference, only venue_owner accounts).
+    const ownerFilter = {
+      role: "venue_owner",
+      $or: [...(venue.ownerUser ? [{ _id: venue.ownerUser }] : []), { partnerVenue: venue._id }]
+    };
+    const users = await User.deleteMany(ownerFilter);
+    await PartnerVenue.deleteOne({ _id: venue._id });
+
+    logger.info(
+      `[MARKETPLACE] ${req.user?.email} deleted venue ${venue.name} (${venue._id}): owner logins ${users.deletedCount}, bookings ${bookings.deletedCount}, blocks ${blocks.deletedCount}`
+    );
+    res.status(200).json({ success: true, message: `${venue.name} and its owner account were deleted` });
   } catch (error) {
     next(error);
   }

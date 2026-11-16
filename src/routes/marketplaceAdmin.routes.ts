@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createVenueWithOwner,
+  deletePartnerVenue,
   getExternalRevenue,
   getVenueRevenue,
   settleVenuePayout,
@@ -22,6 +23,7 @@ router.get("/venues", listPartnerVenues);
 router.post("/venues", createVenueWithOwner);
 router.get("/venues/:id", getPartnerVenue);
 router.patch("/venues/:id", updatePartnerVenue);
+router.delete("/venues/:id", adminOnly, deletePartnerVenue);
 router.patch("/venues/:id/commission", adminOnly, setVenueCommission);
 router.post("/venues/:id/owner/reset-password", resetVenueOwnerPassword);
 router.post("/media", uploadVenueMedia);
