@@ -2,7 +2,7 @@ import { Types } from "mongoose";
 
 export interface UserPayload {
   id: string;
-  role: "user" | "admin" | "owner" | "staff" | "promoter" | "seo";
+  role: "user" | "admin" | "owner" | "staff" | "promoter" | "seo" | "venue_owner";
   email?: string;
   name?: string;
   phone?: string;
@@ -13,6 +13,7 @@ export interface UserPayload {
   stripeConnectOnboarded?: boolean;
   chargesEnabled?: boolean;
   payoutsEnabled?: boolean;
+  partnerVenue?: Types.ObjectId;
   createdAt?: Date | string;
   _id: Types.ObjectId;
 }

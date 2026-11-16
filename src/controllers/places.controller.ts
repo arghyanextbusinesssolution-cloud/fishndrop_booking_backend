@@ -13,6 +13,8 @@ export interface PlaceSuggestion {
   address: string;
   lat?: number;
   lng?: number;
+  neighborhood?: string;
+  city?: string;
 }
 
 const NYC = { lat: 40.7128, lng: -74.006 };
@@ -89,7 +91,9 @@ const photonAutocomplete = async (q: string): Promise<PlaceSuggestion[]> => {
       name,
       address,
       lng: f.geometry?.coordinates?.[0],
-      lat: f.geometry?.coordinates?.[1]
+      lat: f.geometry?.coordinates?.[1],
+      neighborhood: p.locality || p.district || undefined,
+      city: p.city || p.county || undefined
     };
   });
 };

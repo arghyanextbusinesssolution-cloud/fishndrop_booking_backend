@@ -188,7 +188,7 @@ const friendlyRequirements = (fields: string[] = []): string[] => {
 };
 
 /** "connected" = the promoter can receive ticket money (what checkout's destination charge needs). */
-const describeAccount = (account: any) => {
+export const describeAccount = (account: any) => {
   const transfersActive = account.capabilities?.transfers === "active";
   const canReceive = Boolean(account.charges_enabled && transfersActive);
   const due: string[] = [...(account.requirements?.past_due || []), ...(account.requirements?.currently_due || [])];
@@ -205,7 +205,7 @@ const describeAccount = (account: any) => {
 };
 
 /** The simulator only makes sense when no real Stripe key is configured (local dev). */
-const simulatorAvailable = () => !getStripe() && process.env.NODE_ENV !== "production";
+export const simulatorAvailable = () => !getStripe() && process.env.NODE_ENV !== "production";
 
 /**
  * GET /api/payments/connect/status

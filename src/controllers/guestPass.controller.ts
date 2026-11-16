@@ -7,13 +7,21 @@ import { sendGHLGuestPassIssuedEvent, sendGHLGuestPassCancelledEvent } from "../
 import jwt from "jsonwebtoken";
 import User from "../models/User";
 import { storeImage } from "../utils/flyer.utils";
+import MarketplaceBooking from "../models/MarketplaceBooking";
+import {
+  MARKETPLACE_INVITABLE,
+  ensureInvitationToken,
+  findPartyById,
+  findPartyByToken,
+  partyForPass,
+  partyFromMarketplace,
+  partyFromTropica
+} from "../services/party.service";
 
 const sanitizeString = (value: unknown): string =>
   typeof value === "string" ? value.trim().replace(/<[^>]*>/g, "") : "";
 
 
-const VENUE_NAME = "Tropica Sanctuary NYC";
-const VENUE_ADDRESS = process.env.TROPICA_ADDRESS || "Brooklyn, NY";
 
 /** Invites only work for live, paid (or Zelle-proof-submitted) private bookings. */
 const isInvitable = (b: any): boolean =>
@@ -64,48 +72,49 @@ const passPublic = (p: any) => ({
 /**
  * GET /api/invitations/:token
  * Public invitation preview. With a login token, also returns the viewer's own pass.
+ * Works for Tropica private events and paid partner-venue bookings alike.
  */
 export const getInvitationDetails = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
     const token = sanitizeString(req.params.token);
-    const booking = await Booking.findOne({ invitationToken: token });
+    const party = await findPartyByToken(token);
 
-    if (!booking) {
+    if (!party) {
       res.status(404).json({ success: false, message: "Invitation not found or invalid link" });
       return;
     }
-    if (!isInvitable(booking)) {
+    if (!party.invitable) {
       res.status(410).json({
         success: false,
         code: "INVITE_INACTIVE",
-        message: booking.status === "cancelled" ? "This event was cancelled." : "This invitation isn't active yet. Please check back soon."
+        message: party.cancelled ? "This event was cancelled." : "This invitation isn't active yet. Please check back soon."
       });
       return;
     }
 
-    const registered = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
+    const registered = await GuestPass.countDocuments({ booking: party._id, status: activeStatuses });
     const viewerId = optionalUserId(req);
-    const myPass = viewerId ? await GuestPass.findOne({ booking: booking._id, user: viewerId }) : null;
-    const isHost = !!viewerId && String(booking.user) === viewerId;
+    const myPass = viewerId ? await GuestPass.findOne({ booking: party._id, user: viewerId }) : null;
+    const isHost = !!viewerId && String(party.user) === viewerId;
 
     res.status(200).json({
       success: true,
       invitation: {
-        hostName: firstName(booking.customerName),
-        occasion: booking.occasion || "celebration",
-        eventTitle: booking.eventTitle || "",
-        flyerUrl: booking.flyerUrl || "",
-        date: booking.bookingDate,
-        startTime: booking.bookingTime,
-        endTime: (booking as any).eventEndTime || "",
-        durationHours: booking.durationHours,
-        venueName: VENUE_NAME,
-        venueAddress: VENUE_ADDRESS,
-        capacity: booking.partySize,
+        hostName: firstName(party.customerName),
+        occasion: party.occasion,
+        eventTitle: party.eventTitle,
+        flyerUrl: party.flyerUrl,
+        date: party.date,
+        startTime: party.startTime,
+        endTime: party.endTime,
+        durationHours: party.durationHours,
+        venueName: party.venueName,
+        venueAddress: party.venueAddress,
+        capacity: party.capacity,
         registered,
-        spotsRemaining: Math.max(0, booking.partySize - registered),
-        isCapacityFull: registered >= booking.partySize,
-        requireHostApproval: Boolean(booking.requireHostApproval),
+        spotsRemaining: Math.max(0, party.capacity - registered),
+        isCapacityFull: registered >= party.capacity,
+        requireHostApproval: party.requireHostApproval,
         isHost,
         myPass: myPass ? passPublic(myPass) : null
       }
@@ -129,12 +138,12 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
     const token = sanitizeString(req.params.token);
     const nameInput = sanitizeString(req.body.name || req.body.guestName);
 
-    const booking = await Booking.findOne({ invitationToken: token });
-    if (!booking) {
+    const party = await findPartyByToken(token);
+    if (!party) {
       res.status(404).json({ success: false, message: "Invitation not found" });
       return;
     }
-    if (!isInvitable(booking)) {
+    if (!party.invitable) {
       res.status(410).json({ success: false, code: "INVITE_INACTIVE", message: "This invitation isn't active." });
       return;
     }
@@ -156,29 +165,26 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
       await guest.save();
     }
 
+    const fullMessage = `The guest list is full (${party.capacity} guests). Please contact ${firstName(party.customerName)}.`;
     const existingPass = await GuestPass.findOne({
-      booking: booking._id,
+      booking: party._id,
       $or: [{ user: guest._id }, { guestPhone: guest.phone }]
     });
     if (existingPass && existingPass.status === "cancelled") {
-      const activeCount = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
-      if (activeCount >= booking.partySize) {
-        res.status(403).json({
-          success: false,
-          code: "CAPACITY_REACHED",
-          message: `The guest list is full (${booking.partySize} guests). Please contact ${firstName(booking.customerName)}.`
-        });
+      const activeCount = await GuestPass.countDocuments({ booking: party._id, status: activeStatuses });
+      if (activeCount >= party.capacity) {
+        res.status(403).json({ success: false, code: "CAPACITY_REACHED", message: fullMessage });
         return;
       }
       existingPass.user = guest._id as any;
       existingPass.guestName = guestName;
-      existingPass.status = booking.requireHostApproval ? "pending_approval" : "approved";
+      existingPass.status = party.requireHostApproval ? "pending_approval" : "approved";
       existingPass.qrCodeToken = generateGuestQrToken();
       existingPass.joinedAt = new Date();
       existingPass.cancelledAt = undefined;
       await existingPass.save();
-      logger.info(`Guest ${guestName} re-joined booking #${booking._id} with pass ${existingPass.passCode}`);
-      void sendGHLGuestPassIssuedEvent(existingPass, booking);
+      logger.info(`Guest ${guestName} re-joined ${party.kind} booking #${party._id} with pass ${existingPass.passCode}`);
+      if (party.kind === "tropica") void sendGHLGuestPassIssuedEvent(existingPass, party.doc);
       res.status(201).json({
         success: true,
         message: existingPass.status === "approved" ? "You're back on the guest list!" : "Request sent! Your host will approve you soon.",
@@ -195,19 +201,16 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
       return;
     }
 
-    const activePassCount = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
-    if (activePassCount >= booking.partySize) {
-      res.status(403).json({
-        success: false,
-        code: "CAPACITY_REACHED",
-        message: `The guest list is full (${booking.partySize} guests). Please contact ${firstName(booking.customerName)}.`
-      });
+    const activePassCount = await GuestPass.countDocuments({ booking: party._id, status: activeStatuses });
+    if (activePassCount >= party.capacity) {
+      res.status(403).json({ success: false, code: "CAPACITY_REACHED", message: fullMessage });
       return;
     }
 
-    const passStatus = booking.requireHostApproval ? "pending_approval" : "approved";
+    const passStatus = party.requireHostApproval ? "pending_approval" : "approved";
     const pass = await GuestPass.create({
-      booking: booking._id,
+      booking: party._id,
+      bookingModel: party.model,
       user: guest._id,
       guestName,
       guestEmail: guest.email && !/^guest_/.test(guest.email) ? guest.email : "",
@@ -219,8 +222,8 @@ export const registerGuestForBooking = async (req: Request, res: Response, next:
       joinedAt: new Date()
     });
 
-    logger.info(`Issued guest pass ${pass.passCode} to ${guestName} for booking #${booking._id}`);
-    void sendGHLGuestPassIssuedEvent(pass, booking);
+    logger.info(`Issued guest pass ${pass.passCode} to ${guestName} for ${party.kind} booking #${party._id}`);
+    if (party.kind === "tropica") void sendGHLGuestPassIssuedEvent(pass, party.doc);
 
     res.status(201).json({
       success: true,
@@ -244,8 +247,8 @@ export const cancelMyGuestPass = async (req: Request, res: Response, next: NextF
       return;
     }
     const token = sanitizeString(req.params.token);
-    const booking = await Booking.findOne({ invitationToken: token });
-    if (!booking) {
+    const party = await findPartyByToken(token);
+    if (!party) {
       res.status(404).json({ success: false, message: "Invitation not found" });
       return;
     }
@@ -253,7 +256,7 @@ export const cancelMyGuestPass = async (req: Request, res: Response, next: NextF
     const me = await User.findById(req.user._id).select("phone isPhoneVerified").lean();
     const or: any[] = [{ user: req.user._id }];
     if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
-    const pass = await GuestPass.findOne({ booking: booking._id, $or: or, status: activeStatuses });
+    const pass = await GuestPass.findOne({ booking: party._id, $or: or, status: activeStatuses });
     if (!pass) {
       res.status(404).json({ success: false, message: "You're not on this guest list" });
       return;
@@ -281,14 +284,14 @@ export const cancelMyGuestPass = async (req: Request, res: Response, next: NextF
       return;
     }
 
-    const active = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
-    const spotsRemaining = Math.max(0, booking.partySize - active);
-    logger.info(`Guest ${updated.guestName} cancelled pass ${updated.passCode} for booking #${booking._id} (not attending)`);
-    void sendGHLGuestPassCancelledEvent(updated, booking, spotsRemaining);
+    const active = await GuestPass.countDocuments({ booking: party._id, status: activeStatuses });
+    const spotsRemaining = Math.max(0, party.capacity - active);
+    logger.info(`Guest ${updated.guestName} cancelled pass ${updated.passCode} for booking #${party._id} (not attending)`);
+    if (party.kind === "tropica") void sendGHLGuestPassCancelledEvent(updated, party.doc, spotsRemaining);
 
     res.status(200).json({
       success: true,
-      message: `You're off the guest list. ${firstName(booking.customerName)} has been notified.`,
+      message: `You're off the guest list. ${firstName(party.customerName)} has been notified.`,
       pass: passPublic(updated)
     });
   } catch (error: any) {
@@ -298,7 +301,7 @@ export const cancelMyGuestPass = async (req: Request, res: Response, next: NextF
 
 /**
  * GET /api/invitations/booking/:bookingId/guests
- * Host views registered guests and attendance.
+ * Host views registered guests and attendance (Tropica or partner-venue booking).
  */
 export const getBookingGuestPasses = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -307,53 +310,55 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
       return;
     }
 
-    const { bookingId } = req.params;
-    const booking = await Booking.findById(bookingId);
-
-    if (!booking) {
+    const party = await findPartyById(sanitizeString(req.params.bookingId));
+    if (!party) {
       res.status(404).json({ success: false, message: "Booking not found" });
       return;
     }
 
-    // Allow booking owner, admin, or staff
-    const isOwner = booking.user.toString() === req.user._id.toString();
+    // Allow the host, or Tropica admin / staff
+    const isOwner = String(party.user) === req.user._id.toString();
     const isAdmin = ["admin", "owner", "staff"].includes(req.user.role);
-
     if (!isOwner && !isAdmin) {
       res.status(403).json({ success: false, message: "Forbidden" });
       return;
     }
 
-    // Ensure booking has an invitation token
-    if (!booking.invitationToken) {
-      const crypto = await import("crypto");
-      booking.invitationToken = crypto.randomBytes(16).toString("hex");
-      await booking.save();
-    }
-
-    const guestPasses = await GuestPass.find({ booking: booking._id }).sort({ createdAt: -1 });
+    const token = await ensureInvitationToken(party);
+    const guestPasses = await GuestPass.find({ booking: party._id }).sort({ createdAt: -1 });
 
     const checkedInCount = guestPasses.filter((g) => g.checkedIn && g.status !== "removed").length;
     const approvedCount = guestPasses.filter((g) => g.status === "approved").length;
 
-    const baseUrl = getFrontendBaseUrl();
-    const inviteLink = `${baseUrl}/invite/${booking.invitationToken}`;
-
     res.status(200).json({
       success: true,
-      inviteLink,
-      invitationToken: booking.invitationToken,
-      requireHostApproval: booking.requireHostApproval,
-      capacityLimit: booking.partySize,
-      invitesActive: isInvitable(booking),
+      inviteLink: `${getFrontendBaseUrl()}/invite/${token}`,
+      invitationToken: token,
+      requireHostApproval: party.requireHostApproval,
+      capacityLimit: party.capacity,
+      invitesActive: party.invitable,
       event: {
-        date: booking.bookingDate,
-        startTime: booking.bookingTime,
-        endTime: (booking as any).eventEndTime || "",
-        occasion: booking.occasion || "celebration",
-        hostName: firstName(booking.customerName),
-        eventTitle: booking.eventTitle || "",
-        flyerUrl: booking.flyerUrl || ""
+        kind: party.kind,
+        date: party.date,
+        startTime: party.startTime,
+        endTime: party.endTime,
+        occasion: party.occasion,
+        hostName: firstName(party.customerName),
+        eventTitle: party.eventTitle,
+        flyerUrl: party.flyerUrl,
+        venueName: party.venueName,
+        venueAddress: party.venueAddress,
+        // Partner-venue bookings: show the host where their payment stands
+        payment:
+          party.kind === "marketplace"
+            ? {
+                status: party.doc.status,
+                bookingNumber: party.doc.bookingNumber,
+                total: party.doc.customerPrice,
+                paid: party.doc.amountPaid,
+                remaining: party.doc.remainingAmount
+              }
+            : undefined
       },
       totalRegistered: guestPasses.length,
       approvedCount,
@@ -376,41 +381,42 @@ export const updateCelebrationDetails = async (req: Request, res: Response, next
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
-    const booking = await Booking.findById(sanitizeString(req.params.bookingId));
-    if (!booking || booking.bookingType !== "private_event") {
+    const party = await findPartyById(sanitizeString(req.params.bookingId));
+    if (!party) {
       res.status(404).json({ success: false, message: "Celebration not found" });
       return;
     }
-    const isOwner = booking.user.toString() === req.user._id.toString();
+    const isOwner = String(party.user) === req.user._id.toString();
     const isStaff = ["admin", "owner", "staff"].includes(req.user.role);
     if (!isOwner && !isStaff) {
       res.status(403).json({ success: false, message: "Only the host can edit this celebration" });
       return;
     }
 
+    const doc = party.doc;
     if (req.body.eventTitle !== undefined) {
       const title = sanitizeString(req.body.eventTitle);
       if (title.length > 80) {
         res.status(400).json({ success: false, message: "Event name can be at most 80 characters" });
         return;
       }
-      booking.eventTitle = title || undefined;
+      doc.eventTitle = title || undefined;
     }
     if (req.body.flyerUrl !== undefined) {
       try {
-        booking.flyerUrl = (await storeImage(req.body.flyerUrl, "tropica_celebration_flyers")) || undefined;
+        doc.flyerUrl = (await storeImage(req.body.flyerUrl, "tropica_celebration_flyers")) || undefined;
       } catch (err: any) {
         res.status(400).json({ success: false, message: `We couldn't upload the flyer (${err.message}). Please choose it again.` });
         return;
       }
     }
 
-    await booking.save();
-    logger.info(`Celebration #${booking._id} details updated by ${req.user.name || req.user._id}`);
+    await doc.save();
+    logger.info(`Celebration #${party._id} details updated by ${req.user.name || req.user._id}`);
     res.status(200).json({
       success: true,
       message: "Event details saved",
-      event: { eventTitle: booking.eventTitle || "", flyerUrl: booking.flyerUrl || "" }
+      event: { eventTitle: doc.eventTitle || "", flyerUrl: doc.flyerUrl || "" }
     });
   } catch (error: any) {
     next(new Error(`Failed to update celebration: ${error.message}`));
@@ -437,15 +443,14 @@ export const updateGuestPassStatus = async (req: Request, res: Response, next: N
     }
 
     const pass = await GuestPass.findById(passId).populate("booking");
-    if (!pass) {
+    const party = await partyForPass(pass);
+    if (!pass || !party) {
       res.status(404).json({ success: false, message: "Guest pass not found" });
       return;
     }
 
-    const booking = pass.booking as any;
-    const isOwner = booking.user.toString() === req.user._id.toString();
+    const isOwner = String(party.user) === req.user._id.toString();
     const isAdmin = ["admin", "owner", "staff"].includes(req.user.role);
-
     if (!isOwner && !isAdmin) {
       res.status(403).json({ success: false, message: "Forbidden" });
       return;
@@ -458,9 +463,9 @@ export const updateGuestPassStatus = async (req: Request, res: Response, next: N
 
     // Adding a removed / rejected guest back takes a spot, so respect the paid guest count
     if (status === "approved" && !["approved", "pending_approval"].includes(pass.status)) {
-      const active = await GuestPass.countDocuments({ booking: booking._id, status: activeStatuses });
-      if (active >= booking.partySize) {
-        res.status(403).json({ success: false, code: "CAPACITY_REACHED", message: `The guest list is full (${booking.partySize} guests).` });
+      const active = await GuestPass.countDocuments({ booking: party._id, status: activeStatuses });
+      if (active >= party.capacity) {
+        res.status(403).json({ success: false, code: "CAPACITY_REACHED", message: `The guest list is full (${party.capacity} guests).` });
         return;
       }
       pass.removedAt = undefined;
@@ -488,12 +493,12 @@ export const removeGuestPass = async (req: Request, res: Response, next: NextFun
       return;
     }
     const pass = await GuestPass.findById(sanitizeString(req.params.passId)).populate("booking");
-    if (!pass) {
+    const party = await partyForPass(pass);
+    if (!pass || !party) {
       res.status(404).json({ success: false, message: "Guest pass not found" });
       return;
     }
-    const booking = pass.booking as any;
-    const isOwner = booking?.user?.toString() === req.user._id.toString();
+    const isOwner = String(party.user) === req.user._id.toString();
     const isStaff = ["admin", "owner", "staff"].includes(req.user.role);
     if (!isOwner && !isStaff) {
       res.status(403).json({ success: false, message: "Only the host can remove guests" });
@@ -515,7 +520,7 @@ export const removeGuestPass = async (req: Request, res: Response, next: NextFun
       return;
     }
 
-    logger.info(`Guest ${updated.guestName} (${updated.passCode}) removed from booking #${booking._id} by ${req.user.name || req.user._id}`);
+    logger.info(`Guest ${updated.guestName} (${updated.passCode}) removed from booking #${party._id} by ${req.user.name || req.user._id}`);
     res.status(200).json({ success: true, message: `${updated.guestName} was removed. Their QR pass no longer works.`, pass: updated });
   } catch (error: any) {
     next(new Error(`Failed to remove guest: ${error.message}`));
@@ -530,15 +535,14 @@ export const getGuestPassByQrToken = async (req: Request, res: Response, next: N
   try {
     const token = sanitizeString(req.params.qrToken);
     const pass = await GuestPass.findOne({ qrCodeToken: token }).populate("booking");
+    const party = await partyForPass(pass);
 
-    if (!pass) {
+    if (!pass || !party) {
       res.status(404).json({ success: false, message: "Pass not found" });
       return;
     }
 
-    const booking = pass.booking as any;
-    const occasion = String(booking?.occasion || "celebration").replace(/_/g, " ");
-
+    const occasion = party.occasion.replace(/_/g, " ");
     res.status(200).json({
       success: true,
       pass: {
@@ -550,16 +554,16 @@ export const getGuestPassByQrToken = async (req: Request, res: Response, next: N
         checkedInByName: pass.checkedInByName,
         qrCodeToken: pass.qrCodeToken,
         event: {
-          title: booking?.eventTitle || `${firstName(booking?.customerName)}'s ${occasion}`,
-          flyerUrl: booking?.flyerUrl || "",
+          title: party.eventTitle || `${firstName(party.customerName)}'s ${occasion}`,
+          flyerUrl: party.flyerUrl,
           occasion,
-          hostName: booking?.customerName,
-          date: booking?.bookingDate,
-          startTime: booking?.bookingTime,
-          endTime: booking?.eventEndTime || "",
-          venueName: VENUE_NAME,
-          venueAddress: VENUE_ADDRESS,
-          cancelled: booking?.status === "cancelled"
+          hostName: party.customerName,
+          date: party.date,
+          startTime: party.startTime,
+          endTime: party.endTime,
+          venueName: party.venueName,
+          venueAddress: party.venueAddress,
+          cancelled: party.cancelled
         }
       }
     });
@@ -568,10 +572,25 @@ export const getGuestPassByQrToken = async (req: Request, res: Response, next: N
   }
 };
 
+const guestCounts = async (ids: any[]) => {
+  const counts = await GuestPass.aggregate([
+    { $match: { booking: { $in: ids } } },
+    {
+      $group: {
+        _id: "$booking",
+        registered: { $sum: { $cond: [{ $in: ["$status", ["approved", "pending_approval"]] }, 1, 0] } },
+        pending: { $sum: { $cond: [{ $eq: ["$status", "pending_approval"] }, 1, 0] } },
+        checkedIn: { $sum: { $cond: [{ $and: ["$checkedIn", { $ne: ["$status", "removed"] }] }, 1, 0] } }
+      }
+    }
+  ]);
+  return new Map(counts.map((c: any) => [String(c._id), c]));
+};
 
 /**
  * GET /api/invitations/my/celebrations
- * The signed-in host's private venue bookings with guest-list and attendance counts.
+ * The signed-in host's private Tropica events and paid partner-venue bookings,
+ * with guest-list and attendance counts.
  */
 export const getMyCelebrations = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -579,52 +598,53 @@ export const getMyCelebrations = async (req: Request, res: Response, next: NextF
       res.status(401).json({ success: false, message: "Unauthorized" });
       return;
     }
-    const bookings = await Booking.find({ user: req.user._id, bookingType: "private_event", status: { $ne: "cancelled" } })
-      .select("bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus paymentMethod zelleProofUrl zelleVerificationStatus eventTitle flyerUrl")
-      .sort({ bookingDate: -1 })
-      .lean();
-
-    const ids = bookings.map((b) => b._id);
-    const counts = await GuestPass.aggregate([
-      { $match: { booking: { $in: ids } } },
-      {
-        $group: {
-          _id: "$booking",
-          registered: { $sum: { $cond: [{ $in: ["$status", ["approved", "pending_approval"]] }, 1, 0] } },
-          pending: { $sum: { $cond: [{ $eq: ["$status", "pending_approval"] }, 1, 0] } },
-          checkedIn: { $sum: { $cond: [{ $and: ["$checkedIn", { $ne: ["$status", "removed"] }] }, 1, 0] } }
-        }
-      }
+    const [bookings, partner] = await Promise.all([
+      Booking.find({ user: req.user._id, bookingType: "private_event", status: { $ne: "cancelled" } })
+        .select("bookingDate bookingTime eventEndTime durationHours partySize occasion status paymentStatus paymentMethod zelleProofUrl zelleVerificationStatus eventTitle flyerUrl customerName user bookingType")
+        .lean(),
+      MarketplaceBooking.find({ user: req.user._id, status: { $in: MARKETPLACE_INVITABLE } })
+        .populate("venue", "name address flyerUrl")
+        .lean()
     ]);
-    const byId = new Map(counts.map((c: any) => [String(c._id), c]));
 
-    res.status(200).json({
-      success: true,
-      celebrations: bookings.map((b: any) => {
-        const c = byId.get(String(b._id)) || { registered: 0, pending: 0, checkedIn: 0 };
+    const parties = [...bookings.map(partyFromTropica), ...partner.map((m) => partyFromMarketplace(m))];
+    const byId = await guestCounts(parties.map((p) => p._id));
+
+    const celebrations = parties
+      .map((p) => {
+        const c = byId.get(String(p._id)) || { registered: 0, pending: 0, checkedIn: 0 };
+        const b: any = p.doc;
         return {
-          _id: b._id,
-          date: b.bookingDate,
-          startTime: b.bookingTime,
-          endTime: b.eventEndTime || "",
-          durationHours: b.durationHours,
-          occasion: b.occasion || "celebration",
-          eventTitle: b.eventTitle || "",
-          flyerUrl: b.flyerUrl || "",
-          capacity: b.partySize,
+          _id: p._id,
+          kind: p.kind,
+          date: p.date,
+          startTime: p.startTime,
+          endTime: p.endTime,
+          durationHours: p.durationHours,
+          occasion: p.occasion,
+          eventTitle: p.eventTitle,
+          flyerUrl: p.flyerUrl,
+          venueName: p.venueName,
+          capacity: p.capacity,
           registered: c.registered,
           pendingApproval: c.pending,
           checkedIn: c.checkedIn,
-          invitesActive: isInvitable(b),
+          invitesActive: p.invitable,
           paymentLabel:
-            b.status === "confirmed" || ["deposit_paid", "paid"].includes(b.paymentStatus)
+            p.kind === "marketplace"
+              ? b.status === "deposit_paid"
+                ? "Deposit paid"
+                : "Confirmed"
+              : b.status === "confirmed" || ["deposit_paid", "paid"].includes(b.paymentStatus)
               ? "Confirmed"
               : b.paymentMethod === "zelle" && b.zelleProofUrl
               ? "Zelle verifying"
               : "Awaiting payment"
         };
       })
-    });
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+    res.status(200).json({ success: true, celebrations });
   } catch (error: any) {
     next(new Error(`Failed to load celebrations: ${error.message}`));
   }
@@ -645,32 +665,40 @@ export const getMyInvites = async (req: Request, res: Response, next: NextFuncti
     if (me?.phone && me.isPhoneVerified) or.push({ guestPhone: me.phone });
 
     const passes = await GuestPass.find({ $or: or, status: { $nin: ["rejected", "cancelled", "removed"] } })
-      .populate("booking", "customerName occasion bookingDate bookingTime eventEndTime durationHours status invitationToken user eventTitle flyerUrl")
+      .populate(
+        "booking",
+        // Tropica Booking fields + partner MarketplaceBooking fields (each model ignores the other's)
+        "customerName occasion bookingDate bookingTime eventEndTime durationHours status paymentStatus paymentMethod zelleProofUrl bookingType invitationToken user eventTitle flyerUrl partySize date startTime endTime guests venue venueName"
+      )
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
 
-    const invites = passes
-      .filter((p: any) => p.booking && p.booking.status !== "cancelled" && String(p.booking.user) !== String(req.user!._id))
-      .map((p: any) => ({
+    const invites = [];
+    for (const p of passes as any[]) {
+      if (!p.booking || String(p.booking.user) === String(req.user._id)) continue;
+      const party = await partyForPass(p);
+      if (!party || party.cancelled) continue;
+      invites.push({
         _id: p._id,
-        hostName: firstName(p.booking.customerName),
-        occasion: p.booking.occasion || "celebration",
-        eventTitle: p.booking.eventTitle || "",
-        flyerUrl: p.booking.flyerUrl || "",
-        date: p.booking.bookingDate,
-        startTime: p.booking.bookingTime,
-        endTime: p.booking.eventEndTime || "",
-        venueName: VENUE_NAME,
-        venueAddress: VENUE_ADDRESS,
-        inviteToken: p.booking.invitationToken,
+        hostName: firstName(party.customerName),
+        occasion: party.occasion,
+        eventTitle: party.eventTitle,
+        flyerUrl: party.flyerUrl,
+        date: party.date,
+        startTime: party.startTime,
+        endTime: party.endTime,
+        venueName: party.venueName,
+        venueAddress: party.venueAddress,
+        inviteToken: party.invitationToken,
         passCode: p.passCode,
         qrCodeToken: p.qrCodeToken,
         status: p.status,
         checkedIn: p.checkedIn,
         cancelDeadline: cancelDeadline(p),
         canCancel: canGuestCancel(p)
-      }));
+      });
+    }
 
     res.status(200).json({ success: true, invites });
   } catch (error: any) {

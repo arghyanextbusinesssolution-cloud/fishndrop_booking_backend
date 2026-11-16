@@ -24,6 +24,8 @@ import checkinRoutes from "./routes/checkin.routes";
 import guestPassRoutes from "./routes/guestPass.routes";
 import placesRoutes from "./routes/places.routes";
 import aiRoutes from "./routes/ai.routes";
+import marketplaceRoutes from "./routes/marketplace.routes";
+import marketplaceAdminRoutes from "./routes/marketplaceAdmin.routes";
 import Booking from "./models/Booking";
 import SlotLock from "./models/SlotLock";
 import { sendRemainingBalanceReminderViaEmailJS, sendRemainingBalanceCancellationViaEmailJS } from "./utils/email.utils";
@@ -132,6 +134,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/bookings", bookingRoutes);
 app.use("/bookings", bookingRoutes);
 app.use("/api/admin/financials", financialsRoutes);
+app.use("/api/admin/marketplace", marketplaceAdminRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/blog", blogRoutes);
 app.use("/api/gallery", galleryRoutes);
@@ -140,6 +143,7 @@ app.use("/api/tickets", ticketRoutes);
 app.use("/api/check-in", checkinRoutes);
 app.use("/api/invitations", guestPassRoutes);
 app.use("/api/places", placesRoutes);
+app.use("/api/marketplace", marketplaceRoutes);
 app.use("/api/webhooks", webhookRoutes);
 
 app.use((req, res) => {

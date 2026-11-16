@@ -32,3 +32,16 @@ export const blogEditorOnly = (req: Request, res: Response, next: NextFunction):
 };
 
 export default adminOnly;
+
+/** Partner portal: venue-owner logins only, and only once linked to a venue. */
+export const venueOwnerOnly = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.user || req.user.role !== "venue_owner") {
+    res.status(403).json({ success: false, message: "Forbidden: venue partner access required." });
+    return;
+  }
+  if (!req.user.partnerVenue) {
+    res.status(403).json({ success: false, message: "Your login isn't linked to a venue yet. Please contact Tropica." });
+    return;
+  }
+  next();
+};

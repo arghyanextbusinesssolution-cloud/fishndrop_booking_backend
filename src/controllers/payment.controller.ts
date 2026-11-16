@@ -888,6 +888,15 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
       // Embedded ticket checkout (PaymentElement). Safety net if the buyer closes the tab
       // before the success page runs — fulfilment is idempotent.
       const intent = event.data.object as any;
+      if (intent.metadata?.type === "marketplace_booking") {
+        try {
+          const { fulfillMarketplacePayment } = await import("../services/marketplace/payment.service");
+          await fulfillMarketplacePayment(intent);
+          logger.info(`Webhook: Marketplace payment ${intent.id} recorded for booking ${intent.metadata.bookingId}`);
+        } catch (mktErr: any) {
+          logger.error(`Webhook: Failed to record marketplace payment ${intent.id}: ${mktErr.message}`);
+        }
+      }
       if (intent.metadata?.type === "event_ticket" && intent.metadata?.orderId) {
         try {
           const { fulfillTicketOrder } = await import("./ticketPurchase.controller");
@@ -950,6 +959,25 @@ export const handleStripeWebhook = async (req: Request, res: Response): Promise<
             }
           }
         );
+        // Partner venues (marketplace) use the same Express flow
+        const PartnerVenue = (await import("../models/PartnerVenue")).default;
+        await PartnerVenue.updateOne(
+          { stripeConnectAccountId: account.id },
+          {
+            $set: {
+              chargesEnabled: Boolean(account.charges_enabled && account.capabilities?.transfers === "active"),
+              payoutsEnabled: Boolean(account.payouts_enabled),
+              stripeConnectOnboarded: Boolean(account.details_submitted)
+            }
+          }
+        );
+        if (account.charges_enabled && account.capabilities?.transfers === "active") {
+          const venue = await PartnerVenue.findOne({ stripeConnectAccountId: account.id }).select("_id").lean();
+          if (venue) {
+            const { autoSettleVenue } = await import("../services/marketplace/settlement.service");
+            void autoSettleVenue(venue._id).catch(() => undefined);
+          }
+        }
         logger.info(`Webhook: Synced Stripe Connect status for account ${account.id}`);
       } catch (err: any) {
         logger.warn(`Failed to sync account update: ${err.message}`);

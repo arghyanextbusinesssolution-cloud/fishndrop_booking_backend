@@ -39,6 +39,7 @@ const authMiddleware = async (req: Request, res: Response, next: NextFunction): 
       stripeConnectOnboarded: user.stripeConnectOnboarded,
       chargesEnabled: user.chargesEnabled,
       payoutsEnabled: user.payoutsEnabled,
+      partnerVenue: user.partnerVenue,
       createdAt: (user as any).createdAt
     };
     next();

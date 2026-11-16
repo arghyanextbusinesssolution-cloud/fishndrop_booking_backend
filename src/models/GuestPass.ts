@@ -3,6 +3,8 @@ import { Document, Schema, Types, model } from "mongoose";
 
 export interface IGuestPass extends Document {
   booking: Types.ObjectId;
+  /** Which collection `booking` points to: Tropica's own venue or a partner venue. */
+  bookingModel?: "Booking" | "MarketplaceBooking";
   user?: Types.ObjectId; // guest's phone-verified Tropica account
   guestName: string;
   guestEmail: string;
@@ -24,7 +26,16 @@ export interface IGuestPass extends Document {
 
 const guestPassSchema = new Schema<IGuestPass>(
   {
-    booking: { type: Schema.Types.ObjectId, ref: "Booking", required: true, index: true },
+    booking: {
+      type: Schema.Types.ObjectId,
+      // Older passes have no bookingModel → Tropica's own Booking.
+      ref: function (this: any, doc?: any) {
+        return (doc || this)?.bookingModel === "MarketplaceBooking" ? "MarketplaceBooking" : "Booking";
+      },
+      required: true,
+      index: true
+    },
+    bookingModel: { type: String, enum: ["Booking", "MarketplaceBooking"], default: "Booking" },
     guestName: { type: String, required: true, trim: true, maxlength: 100 },
     user: { type: Schema.Types.ObjectId, ref: "User", index: true },
     guestEmail: { type: String, default: "", trim: true, lowercase: true },

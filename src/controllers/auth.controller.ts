@@ -448,6 +448,8 @@ export const login = async (req: Request, res: Response, next: NextFunction): Pr
         algorithm: "HS256",
         expiresIn: "7d"
       });
+      // Shown to staff on the Venue Owners page ("has this owner logged in yet?")
+      void User.updateOne({ _id: user._id }, { $set: { lastLoginAt: new Date() } }).catch(() => undefined);
       res.status(200).json({
         success: true,
         token,

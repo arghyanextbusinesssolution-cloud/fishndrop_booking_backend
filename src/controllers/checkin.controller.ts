@@ -247,6 +247,15 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
       $or: [{ qrCodeToken: rawCode }, { passCode: rawCode.toUpperCase() }]
     }).populate("booking");
 
+    if (guestPass && guestPass.bookingModel === "MarketplaceBooking") {
+      res.status(403).json({
+        success: false,
+        code: "PARTNER_VENUE_PASS",
+        message: "This guest pass is for a party at a Tropica partner venue, not this venue."
+      });
+      return;
+    }
+
     if (guestPass && isPromoter) {
       res.status(403).json({
         success: false,
@@ -395,6 +404,7 @@ export const searchTickets = async (req: Request, res: Response, next: NextFunct
     }));
 
     const passFilter: any = {
+      bookingModel: { $ne: "MarketplaceBooking" },
       $or: [
         { passCode: { $regex: safe, $options: "i" } },
         { guestName: { $regex: safe, $options: "i" } },

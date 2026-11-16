@@ -6,7 +6,7 @@ export interface IUser extends Document {
   email?: string;
   phone?: string;
   password?: string;
-  role: "user" | "admin" | "owner" | "staff" | "promoter" | "seo";
+  role: "user" | "admin" | "owner" | "staff" | "promoter" | "seo" | "venue_owner";
   otpCode?: string;
   otpExpires?: Date;
   isPhoneVerified?: boolean;
@@ -23,6 +23,9 @@ export interface IUser extends Document {
   chargesEnabled?: boolean;
   payoutsEnabled?: boolean;
   platformFeeOverride?: number;
+  // Venue owner (role "venue_owner") — the marketplace listing this account manages
+  partnerVenue?: Types.ObjectId;
+  lastLoginAt?: Date;
   comparePassword(candidate: string): Promise<boolean>;
 }
 
@@ -34,7 +37,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     email: { type: String, lowercase: true, trim: true, unique: true, sparse: true },
     password: { type: String, required: false, select: false },
     phone: { type: String, required: false, trim: true, unique: true, sparse: true },
-    role: { type: String, enum: ["user", "admin", "owner", "staff", "promoter", "seo"], default: "user" },
+    role: { type: String, enum: ["user", "admin", "owner", "staff", "promoter", "seo", "venue_owner"], default: "user" },
     otpCode: { type: String, select: false },
     otpExpires: { type: Date, select: false },
     isPhoneVerified: { type: Boolean, default: false },
@@ -54,7 +57,9 @@ const userSchema = new Schema<IUser, IUserModel>(
     stripeConnectOnboarded: { type: Boolean, default: false },
     chargesEnabled: { type: Boolean, default: false },
     payoutsEnabled: { type: Boolean, default: false },
-    platformFeeOverride: { type: Number, min: 0, max: 100 }
+    platformFeeOverride: { type: Number, min: 0, max: 100 },
+    partnerVenue: { type: Schema.Types.ObjectId, ref: "PartnerVenue" },
+    lastLoginAt: { type: Date }
   },
   { timestamps: true }
 );
