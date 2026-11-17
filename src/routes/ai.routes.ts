@@ -4,6 +4,9 @@ import authMiddleware from "../middleware/auth.middleware";
 import adminOnly from "../middleware/admin.middleware";
 import { startAiHoldWatcher } from "../ai/aiBooking";
 import {
+  aiBookingCheck,
+  aiBookingDraft,
+  aiBookingDraftPublic,
   aiBookingStatus,
   availabilityAlternatives,
   availabilityCheck,
@@ -43,6 +46,11 @@ router.post("/ghl/resume", requireAiSecret, resumeConversation);
 // Availability service (secret-protected, used by the AI and for testing)
 router.post("/availability/check", requireAiSecret, availabilityCheck);
 router.post("/availability/alternatives", requireAiSecret, availabilityAlternatives);
+
+// Chat booking: check → (customer says yes) → draft held 30 min → website checkout link
+router.post("/bookings/check", requireAiSecret, aiBookingCheck);
+router.post("/bookings/draft", requireAiSecret, aiBookingDraft);
+router.get("/bookings/draft/:code", aiBookingDraftPublic);
 
 // Testing without GHL
 router.post("/test-chat", requireAiSecret, testChat);

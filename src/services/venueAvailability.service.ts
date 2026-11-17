@@ -1,6 +1,7 @@
 import Booking from "../models/Booking";
 import Event from "../models/Event";
 import SlotLock from "../models/SlotLock";
+import AiBookingDraft from "../models/AiBookingDraft";
 import { timeToMinutes } from "../utils/time.utils";
 import { addDays, getExternalBusyRanges, nyToUtc } from "./googleCalendar.service";
 
@@ -34,6 +35,8 @@ const SLOT_LOCK_MINS = 120;
 export interface BusyOptions {
   excludeBookingId?: string;
   excludeEventId?: string;
+  /** An AI chat booking draft whose 30-min hold should be ignored (the customer completing it). */
+  excludeAiDraftCode?: string;
 }
 
 const LABELS: Record<BusySource, string> = {
@@ -58,7 +61,7 @@ export const getSessionBusyBlocks = async (date: string, opts: BusyOptions = {})
   const dayStart = new Date(`${date}T00:00:00.000Z`);
   const nextDayStart = new Date(dayStart.getTime() + 24 * 3600 * 1000);
 
-  const [bookings, locks, events, googleBusy] = await Promise.all([
+  const [bookings, locks, events, googleBusy, aiHolds] = await Promise.all([
     Booking.find({
       bookingDate: { $gte: dayStart, $lt: nextDayStart },
       status: { $in: ["confirmed", "pending"] }
@@ -70,7 +73,9 @@ export const getSessionBusyBlocks = async (date: string, opts: BusyOptions = {})
       status: { $in: VENUE_HOLDING_EVENT_STATUSES },
       date: { $gte: dayStart, $lte: nextDayStart }
     }).select("date startTime endTime"),
-    getExternalBusyRanges(nyToUtc(date, 8, 0), nyToUtc(addDays(date, 1), 8, 0))
+    getExternalBusyRanges(nyToUtc(date, 8, 0), nyToUtc(addDays(date, 1), 8, 0)),
+    // Venue windows the AI is holding (30 min) for a customer who is finishing checkout
+    AiBookingDraft.find({ date, status: "held", holdExpiresAt: { $gt: new Date() } }).select("code startTime durationHours")
   ]);
 
   const blocks: BusyBlock[] = [];
@@ -103,6 +108,12 @@ export const getSessionBusyBlocks = async (date: string, opts: BusyOptions = {})
     if (sameDay ? startHour < 8 : startHour >= 8) continue; // belongs to another session
     const start = timeToMinutes(ev.startTime);
     push(start, start + eventDurationMins(ev.startTime, ev.endTime), "promoter_event");
+  }
+
+  for (const h of aiHolds) {
+    if (opts.excludeAiDraftCode && h.code === opts.excludeAiDraftCode) continue;
+    const start = timeToMinutes(h.startTime);
+    push(start, start + h.durationHours * 60, "private_event");
   }
 
   const sessionMidnight = nyToUtc(date, 0, 0).getTime();

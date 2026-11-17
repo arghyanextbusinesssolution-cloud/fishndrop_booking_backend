@@ -7,6 +7,7 @@ import { checkTableAvailability, checkVenueAvailability, findOpenVenueDates } fr
 import { hasGhlApi, sendReplyToWebhook, sendSocialReply } from "../ai/ghlMessaging";
 import { bookingRef, checkAiHoldPayment } from "../ai/aiBooking";
 import Booking from "../models/Booking";
+import { checkDraft, createDraft, getPublicDraft } from "../ai/aiDraft";
 
 /**
  * Tropica AI booking assistant endpoints.
@@ -99,10 +100,16 @@ export const ghlInboundMessage = async (req: Request, res: Response, next: NextF
                     reply: r.reply,
                     stage: r.stage,
                     handoff: r.handoff,
-                    inboundMessage: m.text
+                    inboundMessage: m.text,
+                    bookingId: r.bookingId,
+                    checkoutUrl: r.checkoutUrl,
+                    paymentStatus: r.paymentStatus,
+                    notes: r.notes
                   });
           }
           console.log(`[AI] 🤖 AI result → status=${r.status} stage=${r.stage} tools=${(r.toolsUsed || []).join(",") || "-"} handoff=${r.handoff}`);
+          if (r.bookingId) console.log(`[AI] 🎫 Booking ID: ${r.bookingId} (${r.paymentStatus || "-"})`);
+          console.log(`[AI] 📝 Notes:\n${r.notes || "-"}`);
           console.log(`[AI] 💬 Reply: ${r.reply ?? "(no reply — " + r.status + ")"}`);
           console.log(`[AI] Delivered to GHL: ${delivered ? "YES" : "NO"} (mode=${mode})\n`);
           logger.info("[AI] handled", { contactId: m.contactId, status: r.status, stage: r.stage, tools: r.toolsUsed, delivered, mode });
@@ -146,6 +153,48 @@ export const availabilityCheck = async (req: Request, res: Response, next: NextF
   try {
     const kind = req.body?.type === "table" ? "table" : "venue";
     res.json(kind === "table" ? await checkTableAvailability(req.body) : await checkVenueAvailability(req.body));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Chat booking — step 1 (bot): POST /api/ai/bookings/check
+ * body: { date: "YYYY-MM-DD", start_time: "20:00", duration_hours, guests, seating?, occasion?, dj?, photographer?, photographer_hours? }
+ * Live availability + exact quote. Nothing is held.
+ */
+export const aiBookingCheck = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await checkDraft(req.body || {}));
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Chat booking — step 2 (bot, after the customer said YES): POST /api/ai/bookings/draft
+ * body: step-1 fields + { full_name, phone, email?, notes?, contactId?, channel? }
+ * Holds the window for 30 min (draft kept 1 hour) → { bookingId, checkoutUrl, holdExpiresAt, total, deposit }.
+ */
+export const aiBookingDraft = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const r = await createDraft(req.body || {});
+    res.status(r.ok ? 201 : 409).json(r);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/** Public — the checkout page: GET /api/ai/bookings/draft/:code */
+export const aiBookingDraftPublic = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const code = String(req.params.code || "");
+    const draft = /^TRP-[A-Z0-9]{6}$/i.test(code) ? await getPublicDraft(code) : null;
+    if (!draft) {
+      res.status(404).json({ success: false, message: "This booking link has expired or doesn't exist." });
+      return;
+    }
+    res.json({ success: true, draft });
   } catch (err) {
     next(err);
   }

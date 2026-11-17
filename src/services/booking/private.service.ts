@@ -12,9 +12,10 @@ export const isPrivateSlotAvailable = async (
   date: string,
   startTime: string,
   durationHours: number,
-  excludeBookingId?: string
+  excludeBookingId?: string,
+  excludeAiDraftCode?: string
 ): Promise<boolean> => {
-  const { slots } = await getPrivateEventAvailability(date, durationHours, excludeBookingId);
+  const { slots } = await getPrivateEventAvailability(date, durationHours, excludeBookingId, excludeAiDraftCode);
   return slots.some((s) => s.slot === startTime && s.isAvailable);
 };
 
@@ -23,12 +24,17 @@ export const isPrivateSlotAvailable = async (
  * window is clear of: other buyouts, table reservations, admin locks, Tropica promoter events and
  * entries added by hand to the venue's Google Calendar (see venueAvailability.service).
  */
-export const getPrivateEventAvailability = async (date: string, duration: number, excludeBookingId?: string) => {
+export const getPrivateEventAvailability = async (
+  date: string,
+  duration: number,
+  excludeBookingId?: string,
+  excludeAiDraftCode?: string
+) => {
   await cleanupExpiredPendingBookings();
 
   const [allTables, blocks] = await Promise.all([
     Table.find(),
-    getSessionBusyBlocks(toYmd(date), { excludeBookingId })
+    getSessionBusyBlocks(toYmd(date), { excludeBookingId, excludeAiDraftCode })
   ]);
 
   const totalCapacity = allTables.reduce((sum, table) => sum + table.capacity, 0);

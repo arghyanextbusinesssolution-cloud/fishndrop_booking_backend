@@ -28,6 +28,26 @@ export interface IAiInquiry {
   durationHours?: number;
   guests?: number;
   occasion?: string;
+  seating?: "seated" | "standing";
+  dj?: boolean;
+  photographer?: boolean;
+  photographerHours?: number;
+  intent?: "reservation" | "walkthrough" | "both";
+  leadType?: "hot" | "warm" | "future";
+}
+
+/** The chat booking (website checkout link) the AI prepared — held 30 min. */
+export interface IAiDraftRef {
+  code: string;
+  checkoutUrl: string;
+  holdExpiresAt: Date;
+  total: number;
+  deposit: number;
+  /** Set when the customer started checkout — the real Booking this chat's payment questions are about. */
+  bookingId?: string;
+  /** Latest payment status the AI saw ("held", "deposit paid", …) and the one already written to GHL notes. */
+  paymentStatus?: string;
+  notedStatus?: string;
 }
 
 export interface IAiLastCheck {
@@ -58,6 +78,7 @@ export interface IAiConversation extends Document {
   contactEmail?: string;
   contactPhone?: string;
   hold?: IAiHold;
+  draft?: IAiDraftRef;
   callback?: {
     phone?: string;
     reason?: string;
@@ -108,6 +129,16 @@ const aiConversationSchema = new Schema<IAiConversation>(
       total: Number,
       status: { type: String, enum: ["awaiting_payment", "confirmed", "expired", "cancelled", "paid_needs_review"] }
     },
+    draft: {
+      code: String,
+      checkoutUrl: String,
+      holdExpiresAt: Date,
+      total: Number,
+      deposit: Number,
+      bookingId: String,
+      paymentStatus: String,
+      notedStatus: String
+    },
     callback: {
       phone: String,
       reason: String,
@@ -123,7 +154,13 @@ const aiConversationSchema = new Schema<IAiConversation>(
       startTime: String,
       durationHours: Number,
       guests: Number,
-      occasion: String
+      occasion: String,
+      seating: { type: String, enum: ["seated", "standing"] },
+      dj: Boolean,
+      photographer: Boolean,
+      photographerHours: Number,
+      intent: { type: String, enum: ["reservation", "walkthrough", "both"] },
+      leadType: { type: String, enum: ["hot", "warm", "future"] }
     },
     lastCheck: {
       kind: { type: String, enum: ["venue", "table"] },

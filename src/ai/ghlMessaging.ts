@@ -73,9 +73,19 @@ export const sendReplyToWebhook = async (p: {
   stage?: string;
   handoff: boolean;
   inboundMessage: string;
+  /** Booking ID the AI created in this chat (TRP-XXXXXX), when there is one. */
+  bookingId?: string;
+  checkoutUrl?: string;
+  paymentStatus?: string;
+  /** Plain-text summary for staff: event details, quote, booking ID, payment, callback. */
+  notes?: string;
 }) => {
   const type = ghlMessageType(p.channel);
   const payload = {
+    bookingId: p.bookingId || "",
+    checkoutUrl: p.checkoutUrl || "",
+    paymentStatus: p.paymentStatus || "",
+    notes: p.notes || "",
     event: "ai_reply",
     contactId: p.contactId,
     contact_id: p.contactId,
@@ -117,6 +127,29 @@ export const deliverReply = async (contactId: string, channel: string, message: 
   const mode = (process.env.AI_REPLY_MODE || "webhook").toLowerCase();
   if (mode === "api") return sendSocialReply(contactId, channel, message);
   return sendReplyToWebhook({ contactId, channel, reply: message, handoff: false, inboundMessage: "" });
+};
+
+/** Adds a note to the GHL contact (shows in the contact's Notes tab). Needs GHL_API_TOKEN with contacts write. */
+export const addContactNote = async (contactId: string, body: string): Promise<boolean> => {
+  if (!hasGhlApi() || !body.trim()) return false;
+  try {
+    const res = await fetch(`${API}/contacts/${encodeURIComponent(contactId)}/notes`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.GHL_API_TOKEN?.trim()}`,
+        Version: "2021-07-28",
+        "Content-Type": "application/json",
+        Accept: "application/json"
+      },
+      body: JSON.stringify({ body: body.slice(0, 5000) })
+    });
+    const text = await res.text();
+    console.log(`[AI] 📝 GHL contact note → HTTP ${res.status}`, res.ok ? "" : text.slice(0, 300));
+    return res.ok;
+  } catch (err: any) {
+    logger.warn("[AI] GHL contact note failed", { contactId, error: err?.message });
+    return false;
+  }
 };
 
 export const addContactTags = async (contactId: string, tags: string[]) => {

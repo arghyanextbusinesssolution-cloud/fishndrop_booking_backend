@@ -23,6 +23,7 @@ const minutesOf = (hhmm: string) => {
 
 export interface Quote {
   guests: number;
+  billableGuests: number;
   durationHours: number;
   base: number;
   extraHours: number;
@@ -32,6 +33,8 @@ export interface Quote {
   total: number;
   deposit: number;
   balance: number;
+  /** Ready-to-send quote sentence with the $50-per-person math. */
+  customerLine: string;
   text: string;
 }
 
@@ -43,7 +46,9 @@ export const priceQuote = (
   photographer = false,
   photographerHours = 2
 ): Quote => {
-  const base = guests * p.perGuestPrice;
+  // Minimum 10 billable guests → $500 minimum for the 5-hour base
+  const billableGuests = Math.max(guests, MIN_VENUE_GUESTS);
+  const base = billableGuests * p.perGuestPrice;
   const extraHours = Math.max(0, durationHours - INCLUDED_HOURS);
   const extraHoursCost = extraHours * p.extraHourPrice;
   const djCost = dj ? p.djPrice : 0;
@@ -52,12 +57,19 @@ export const priceQuote = (
     : 0;
   const total = base + extraHoursCost + djCost + photoCost;
   const deposit = Math.min(total, p.minDepositAmount);
-  const parts = [`${guests} guests × $${p.perGuestPrice} = $${base}`];
-  if (extraHours) parts.push(`${extraHours} extra hour(s) = $${extraHoursCost}`);
-  if (djCost) parts.push(`DJ $${djCost}`);
-  if (photoCost) parts.push(`photographer (${photographerHours}h) $${photoCost}`);
+  const usd = (n: number) => `$${n.toLocaleString("en-US")}`;
+  const parts = [
+    billableGuests > guests
+      ? `$${p.perGuestPrice} per person × ${MIN_VENUE_GUESTS}-guest minimum = ${usd(base)} for 5 hours`
+      : `$${p.perGuestPrice} per person × ${guests} guests = ${usd(base)} for 5 hours`
+  ];
+  if (extraHours) parts.push(`${extraHours} extra hour${extraHours > 1 ? "s" : ""} × $${p.extraHourPrice} = ${usd(extraHoursCost)}`);
+  if (djCost) parts.push(`DJ ${usd(djCost)}`);
+  if (photoCost) parts.push(`photography (${photographerHours}h) ${usd(photoCost)}`);
+  const customerLine = `${parts.join(", plus ")}, so ${usd(total)} total. A ${usd(deposit)} deposit locks in your date; the remaining ${usd(total - deposit)} is due 72 hours before the event.`;
   return {
     guests,
+    billableGuests,
     durationHours,
     base,
     extraHours,
@@ -67,7 +79,8 @@ export const priceQuote = (
     total,
     deposit,
     balance: total - deposit,
-    text: `${parts.join(" + ")} → total $${total}. Deposit $${deposit} to secure the date, balance $${total - deposit} due 72h before the event. Catering not included.`
+    customerLine,
+    text: `Say it to the customer like this (keep the per-person math): "${customerLine}" Catering and custom decor are quoted separately.`
   };
 };
 
@@ -107,12 +120,16 @@ export const checkVenueAvailability = async (args: {
   const dur = durationOf(args.duration_hours);
   const pricing = await getPricing();
   const guests = args.guests ? Math.round(Number(args.guests)) : undefined;
-  const guestNote =
-    guests && guests < MIN_VENUE_GUESTS
-      ? `Private venue buyouts need at least ${MIN_VENUE_GUESTS} guests — a table reservation fits ${guests} guests better.`
-      : guests && guests > pricing.maxGuestCapacity
-        ? `Maximum capacity is ${pricing.maxGuestCapacity} guests.`
-        : undefined;
+  const tooBig = Boolean(guests && guests > pricing.maxGuestCapacity);
+  const guestNote = !guests
+    ? undefined
+    : tooBig
+      ? `Over Tropica's capacity (30 seated / ${pricing.maxGuestCapacity} standing) — follow the Large Events process (partner venues + team follow-up). Do not book.`
+      : guests < MIN_VENUE_GUESTS
+        ? `Billed at the ${MIN_VENUE_GUESTS}-guest minimum ($${MIN_VENUE_GUESTS * pricing.perGuestPrice} for 5 hours).`
+        : guests > 30
+          ? "31-40 guests only works standing — confirm the event will be standing."
+          : undefined;
 
   const open = await openVenueStarts(date, dur.hours);
   const openLabels = open.map((t) => `${to12h(t)}–${to12h(endTime(t, dur.hours))}`);
@@ -155,7 +172,7 @@ export const checkVenueAvailability = async (args: {
     openWindows: openLabels,
     guests,
     guestNote,
-    quote: guests && !guestNote ? priceQuote(pricing, guests, dur.hours).text : undefined,
+    quote: guests && !tooBig ? priceQuote(pricing, guests, dur.hours).text : undefined,
     summary,
     note: "Availability is live right now but not held — it is only secured once booked and the deposit is paid on the website."
   };

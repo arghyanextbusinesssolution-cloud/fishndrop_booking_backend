@@ -10,6 +10,7 @@ import { sanitizeString, buildDayRange } from "../../utils/time.utils";
 import { isValidDob } from "../../utils/dob.utils";
 import * as BookingService from "../../services/booking";
 import Coupon from "../../models/Coupon";
+import { draftForCheckout, markDraftCompleted } from "../../ai/aiDraft";
 import { sendGHLLeadEvent, sendGHLZellePendingEvent, calculateEventTimes } from "../../integrations/ghl";
 
 import { employeeFields, getEmployeeContacts } from "../../integrations/ghl/helpers/team";
@@ -111,7 +112,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       res.status(400).json({ success: false, message: "Please choose a date and start time" });
       return;
     }
-    if (!(await BookingService.isPrivateSlotAvailable(bookingDate, bookingTime, durationHours))) {
+    // Coming from an AI chat booking link: its own 30-minute hold must not block this checkout
+    const aiDraft = await draftForCheckout(req.body.aiDraftCode, bookingDate, bookingTime, durationHours);
+    if (!(await BookingService.isPrivateSlotAvailable(bookingDate, bookingTime, durationHours, undefined, aiDraft?.code))) {
       res.status(409).json({
         success: false,
         message: "Sorry, that date and time is no longer available for a private venue booking. Please pick another slot."
@@ -286,6 +289,8 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     });
 
     await BookingService.createSlotLocksForPrivateEvent(booking._id, parsedDate, bookingTime, durationHours);
+    // The real booking now holds the slot; the chat draft is done
+    if (aiDraft) await markDraftCompleted(aiDraft.code, booking._id);
 
     // Zelle: nothing goes to GHL until the customer uploads the screenshot and submits
     // (see uploadZelleProof). Card: unchanged.
