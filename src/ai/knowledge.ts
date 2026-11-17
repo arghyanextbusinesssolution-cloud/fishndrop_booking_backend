@@ -99,7 +99,7 @@ Add-ons
 - DJ: $${p.djPrice} for up to five hours. "Yes! DJ service is available for $${p.djPrice} for up to five hours."
 - Photography: $${p.photographerBasePrice} for two hours with about 50 edited photos; extra photography hours $${p.photographerExtraHourPrice} each.
 - Decorations are allowed and Tropica offers customized decor services — priced on request (team quotes it).
-- Catering: Jamaican, Mexican and Soul Food options — priced separately; the team (or the booking page menu) gives the quote. Never invent food prices.
+- Catering from our partner restaurants: Jamaican Jerk House (Jamaican / Caribbean), East Coast Street Tacos (Mexican), Cooklyn Eats (Southern soul food), or a custom mix — full menus via get_catering_menu. Priced separately; the team gives the quote. Never invent dishes or food prices.
 
 Links (send only the one that matches what they want — no footer on every message)
 - Book the venue / check event availability yourself: ${links.venue}

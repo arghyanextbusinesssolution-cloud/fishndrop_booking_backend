@@ -31,6 +31,8 @@ const formatPhone = (e164: string): string => {
 };
 import { cancelAiHold, checkAiHoldPayment, createAiVenueHold } from "./aiBooking";
 import { cancelDraftsFor, checkDraft, createDraft, getChatBookingPayment } from "./aiDraft";
+import { bookWalkthrough, checkWalkthrough } from "./walkthrough";
+import { getCateringMenu } from "./cateringMenu";
 
 /**
  * Tropica AI booking assistant — turns one inbound social message into one reply.
@@ -84,6 +86,7 @@ export const buildAiNotes = (conv: IAiConversation): string => {
       `Callback: ${conv.callback.phone ? formatPhone(conv.callback.phone) : "reply in chat"}${conv.callback.bestTime ? `, ${conv.callback.bestTime}` : ""} — ${conv.callback.reason || "requested"}`
     );
   }
+  if (conv.walkthrough?.date) lines.push(`Walkthrough: ${prettyDate(conv.walkthrough.date)} at ${to12h(conv.walkthrough.time)} (booked via chat)`);
   if (i.intent) lines.push(`Wants: ${i.intent}`);
   if (conv.lastCheck?.summary) lines.push(`Last availability check: ${conv.lastCheck.summary}`);
   lines.push(`Stage: ${conv.stage}`);
@@ -268,6 +271,54 @@ const TOOLS: ChatTool[] = [
   {
     type: "function",
     function: {
+      name: "get_catering_menu",
+      description:
+        "Partner restaurant catering menus (food for their event). Call when they ask about food, menu, catering, dishes, what they can eat. Without restaurant → list of partner restaurants; with restaurant (e.g. 'jamaican', 'mexican', 'soul food', 'custom') → that full menu.",
+      parameters: {
+        type: "object",
+        properties: { restaurant: { type: "string", description: "Restaurant or cuisine they asked about (optional)" } }
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_walkthrough",
+      description:
+        "LIVE check for a WALKTHROUGH (venue tour / in-person visit) at a date and time. Without time it lists the open walkthrough times that day. Call before saying a walkthrough time is free. Never use it for event reservations.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string", description: "YYYY-MM-DD (New York)" },
+          time: { type: "string", description: "24h HH:MM, e.g. 15:00" }
+        },
+        required: ["date"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "book_walkthrough",
+      description:
+        "Book the WALKTHROUGH — only after check_walkthrough said it's open AND the customer confirmed the date/time. Sends it to the team's walkthrough calendar. Needs full name and mobile number.",
+      parameters: {
+        type: "object",
+        properties: {
+          date: { type: "string" },
+          time: { type: "string", description: "24h HH:MM" },
+          full_name: { type: "string" },
+          phone: { type: "string" },
+          email: { type: "string" },
+          notes: { type: "string", description: "e.g. event they're planning, guest count" }
+        },
+        required: ["date", "time", "full_name", "phone"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "check_my_booking_payment",
       description:
         "LIVE payment status of the booking made in THIS chat (the booking ID you sent): how much was paid, deposit, remaining balance, confirmed or not. Call it whenever they say they paid / ask if payment went through / ask about their booking status. Takes no arguments — it can only see this chat's booking.",
@@ -397,9 +448,9 @@ RESERVING THE VENUE IN THE CHAT (you CAN do this)
    Then, only once they want to reserve: full name (first + last) → best mobile number (confirm the one on file instead of asking).
    If they ask for the booking link at any point, share it right away and keep helping.
 2. Call check_booking with everything you have. If it's not available, say so kindly and offer the openStartTimes it returned (or find_open_venue_dates). Never offer times a tool didn't return.
-3. When available, send ONE recap and ask for a yes, e.g. "Here's your estimate: Sat, Dec 12, 8 PM–3 AM (7 hours) for 15 guests. 5-hour base $750 + 2 extra hours × $${p.extra} = $250 → $1,000 venue rental, $${p.deposit} minimum deposit to lock it in. Shall I reserve it for you?" Mention unpriced catering/decor as quoted separately.
+3. When available, send ONE recap and ask for a yes, e.g. "Here's your estimate for Sat, Dec 12, 8 PM–3 AM (7 hours): $50 per person × 15 guests = $750 for 5 hours, plus 2 extra hours × $${p.extra} = $250, so $1,000 total. A minimum $${p.deposit} deposit locks in your date. Shall I reserve it for you?" Mention unpriced catering/decor as quoted separately.
    Then offer the choices: (1) I reserve it now and send your secure checkout link, (2) a Tropica support manager calls you, or (3) schedule a walkthrough first.
-4. Only after a clear YES → call create_booking_draft. Then send: the booking ID, the checkoutUrl exactly as returned, and that the date is held for 30 minutes — they verify their phone and pay the $${p.deposit} deposit there to confirm. Never say it's booked or confirmed.
+4. Only after a clear YES → call create_booking_draft. Then send: the booking ID, the checkoutUrl exactly as returned, and that the date is held for 30 minutes — they verify their phone and pay the minimum $${p.deposit} deposit there to confirm. Never say it's booked or confirmed.
 5. If they change date/time/guests/hours after a draft: check_booking again, recap, and create a new draft on YES (the old hold is released automatically). If they cancel: cancel_booking_draft.
 6. If CHAT BOOKING shows an active hold and they ask for the link again, re-share that same checkout link and booking ID.
 7. After a draft, mention the walkthrough ONCE: "If you'd also like to see the venue first, I can share the walkthrough calendar."
@@ -412,10 +463,16 @@ AFTER THEY PAY ("I paid", "done", "did my payment go through?", "what's my booki
 `;
 
 const WALKTHROUGH_RULES = `
-WALKTHROUGHS (tour / in-person visit) — separate from reserving the venue
-- You can't see or book walkthrough slots from this chat. Share the walkthrough calendar link so they can pick any open date: never claim a date is free or booked for a walkthrough.
-- If they mention both a reservation and a walkthrough, ask which they'd like to arrange first and keep both in mind. Never use the event date as the walkthrough date.
-- A walkthrough never reserves the venue.
+WALKTHROUGHS (tour / in-person visit) — separate from reserving the venue. You CAN book them in this chat:
+1. Ask for the walkthrough date and time ("What day and time would you like to come see the venue?"). Never use the event date as the walkthrough date unless they say so.
+2. Call check_walkthrough with the date (+ time). If it's not open, offer the other open times it returned (never invent times).
+3. Get their full name and best mobile number (confirm the ones on file instead of asking again).
+4. Recap and ask for a yes: "Walkthrough on Fri, Nov 20 at 3 PM for Maria Lopez, (917) 555-0142 — shall I book it?"
+5. On YES → book_walkthrough. Say "You're all set" ONLY if it returned booked: true ("You're all set! Your walkthrough is on Fri, Nov 20 at 3 PM at 1007 Hegeman Avenue, Brooklyn."); if booked is false, say it's requested and they'll get a confirmation shortly. If it fails, say so and share the walkthrough calendar link instead.
+- Collect only what's missing: walkthrough date → time → full name → mobile number (use CONTACT ON FILE, don't re-ask).
+- If they'd rather pick a time themselves, share the walkthrough calendar link.
+- If they mention both a reservation and a walkthrough, ask which they'd like to arrange first and keep both in mind.
+- A walkthrough never reserves the venue — say so if they seem to think it does.
 - Existing walkthrough appointments (confirm / cancel / reschedule): you can't look them up here — offer the team (request_human_help) or ${CONTACT.phone}. Never guess an appointment's status.
 `;
 
@@ -526,6 +583,11 @@ KNOWN DETAILS (don't ask again): ${knownDetails(c)}
 LAST AVAILABILITY CHECK: ${last}
 LINK ALREADY SHARED: ${c.linkSharedAt ? "yes" : "no"}
 PHONE ON FILE: ${c.contactPhone ? formatPhone(c.contactPhone) : "none"}
+WALKTHROUGH: ${
+    c.walkthrough?.date
+      ? `already ${c.walkthrough.status === "booked" ? "BOOKED in the walkthrough calendar" : "requested"} for ${prettyDate(c.walkthrough.date)} at ${to12h(c.walkthrough.time)}. To change it: check_walkthrough the new time, confirm, then book_walkthrough (it moves the same appointment — no duplicate).`
+      : "none booked"
+  }
 CALLBACK: ${
     c.callback?.requestedAt && Date.now() - new Date(c.callback.requestedAt).getTime() < 24 * 3600 * 1000
       ? `already requested ${Math.round((Date.now() - new Date(c.callback.requestedAt).getTime()) / 60000)} min ago${c.callback.phone ? ` — team will call ${formatPhone(c.callback.phone)}` : " (reply in chat)"}. Keep helping normally (prices, add-ons, details, booking). Don't ask for their number or a call time again, and don't re-request it. If they ask when/whether they'll be called, answer exactly like: "Our team has your request and will call you${c.callback.phone ? ` at ${formatPhone(c.callback.phone)}` : ""} as soon as they're available. Need it sooner? Call us at ${CONTACT.phone}." Then offer to keep helping.`
@@ -554,10 +616,11 @@ OPENING
 HOW TO HELP
 - A group that wants the whole space → private venue rental (any size up to capacity; under 10 guests is billed as 10). Someone who only wants a table → check_table_availability.
 - ALREADY BOOKED elsewhere (they say "I already booked / my booking / add a DJ to my party" and there's no EXISTING BOOKING): don't start a new reservation or ask "Shall I reserve it?". Quote just the extra if asked, and offer to have the team add it to their booking (request_human_help with what they want). You can't see bookings made outside this chat.
+- FOOD / MENU / CATERING questions: call get_catering_menu (with the cuisine or restaurant if they named one) and share the real menu — never invent dishes. A full menu may be longer than usual (sections on separate lines, dish names only). Catering is quoted separately (no prices); if they want it, save it in notes and the team quotes it.
 - PRICE CHANGED (they add a DJ / photography, change hours or guests): call check_booking (or get_price_quote) again with the new details BEFORE replying and use its new customerLine — never add it up yourself.
-- HOW TO WRITE A QUOTE: use the tool's quote.customerLine wording (it already has the per-person math) — never shorten it to "5-hour base ($1,100)". Always show the per-person math — "$${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours" (under 10 guests: "${10}-guest minimum × $${pricing.perGuestPrice} = $${10 * pricing.perGuestPrice}"), then extra hours ("2 extra hours × $${pricing.extraHourPrice} = $250"), then the total and the $${pricing.minDepositAmount} deposit. Example: "That's $${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours, plus 2 extra hours × $${pricing.extraHourPrice} = $250, so $1,350 total. A $${pricing.minDepositAmount} deposit locks in your date; the remaining $1,050 is due 72 hours before the event."
-- OFFER THE EXTRAS ONCE: after the first full quote (guests + hours known), unless DJ / photography / food were already discussed, end that message with ONLY this question (no reserve/callback/walkthrough choice in the same message — that comes in your next reply): "Would you like help with a DJ, photography or food for your event? We can arrange all of that for you." DJ $${pricing.djPrice} (up to 5h), photography $${pricing.photographerBasePrice} for 2h (+$${pricing.photographerExtraHourPrice}/extra hour), food: Jamaican, Mexican or Soul Food catering (quoted separately). If they say no, move on — never ask again.
-- HOURS + EXTRA-HOUR PRICE: whenever you quote while the customer hasn't said how many hours they want, always add that the price covers 5 hours and each extra hour is $${pricing.extraHourPrice} (up to 12 hours total) — and ask for the hours. If the start time is also missing, ask both in one line, e.g. "Wed, Dec 9 is available for 22 guests! The 5-hour rental is $1,100 with a $300 deposit, and each extra hour is $${pricing.extraHourPrice} (up to 12 hours). What time would you like to start, and how many hours in total?"
+- HOW TO WRITE A QUOTE: use the tool's quote.customerLine wording (it already has the per-person math) — never shorten it to "5-hour base ($1,100)". Always show the per-person math — "$${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours" (under 10 guests: "${10}-guest minimum × $${pricing.perGuestPrice} = $${10 * pricing.perGuestPrice}"), then extra hours ("2 extra hours × $${pricing.extraHourPrice} = $250"), then the total and the minimum $${pricing.minDepositAmount} deposit (always say "minimum"). Example: "That's $${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours, plus 2 extra hours × $${pricing.extraHourPrice} = $250, so $1,350 total. A minimum $${pricing.minDepositAmount} deposit locks in your date; the remaining $1,050 is due 72 hours before the event."
+- OFFER THE EXTRAS ONCE: after the first full quote (guests + hours known), unless DJ / photography / food were already discussed, end that message with ONLY this offer (no reserve/callback/walkthrough choice in the same message — that comes in your next reply): "If you'd like, we can also arrange a DJ, photography or food for your event — just let me know!" Say it as a friendly optional offer, never as a required question. DJ $${pricing.djPrice} (up to 5h), photography $${pricing.photographerBasePrice} for 2h (+$${pricing.photographerExtraHourPrice}/extra hour), food: Jamaican, Mexican or Soul Food catering (quoted separately). If they say no, move on — never ask again.
+- HOURS + EXTRA-HOUR PRICE: whenever you quote while the customer hasn't said how many hours they want, always add that the price covers 5 hours and each extra hour is $${pricing.extraHourPrice} (up to 12 hours total) — and ask for the hours. If the start time is also missing, ask both in one line, e.g. "Wed, Dec 9 is available for 22 guests! The 5-hour rental is $1,100 with a minimum $300 deposit, and each extra hour is $${pricing.extraHourPrice} (up to 12 hours). What time would you like to start, and how many hours in total?"
 - PRICE QUESTIONS ("how much for 20 people with a DJ?"): answer right away with get_price_quote — price doesn't depend on the date, so never ask for a date before quoting. Assume 5 hours unless they said otherwise, then ask your next question.
 - As soon as you know a date, check it live (check_booking${CHAT_BOOKING_ENABLED ? "" : " / check_venue_availability"}). Quote prices with get_price_quote or check_booking — never do the math yourself.
 - "8" / "8 at night" = 20:00. Vague times ("evening") → show the open evening start times from the tool.
@@ -778,6 +841,36 @@ const runTool = async (name: string, rawArgs: string, st: TurnState): Promise<un
           st.draftCreated = true;
         } else {
           logger.warn("[AI] booking draft not created", { contactId: conv.contactId, error: r.error, args });
+        }
+        return r;
+      }
+      case "get_catering_menu":
+        return getCateringMenu({ restaurant: args.restaurant });
+      case "check_walkthrough": {
+        rememberDetails(conv, { intent: conv.inquiry?.intent === "reservation" ? "both" : conv.inquiry?.intent || "walkthrough" });
+        return await checkWalkthrough({ date: args.date, time: args.time });
+      }
+      case "book_walkthrough": {
+        rememberDetails(conv, { full_name: args.full_name, email: args.email });
+        const r: any = await bookWalkthrough({
+          date: args.date,
+          time: args.time,
+          full_name: args.full_name || conv.contactName,
+          phone: args.phone || conv.contactPhone,
+          email: args.email || conv.contactEmail,
+          notes: [args.notes, knownDetails(conv) !== "nothing yet" ? `Inquiry: ${knownDetails(conv)}` : ""].filter(Boolean).join(" · "),
+          contactId: conv.contactId,
+          channel: conv.channel
+        });
+        if (r.ok) {
+          const phone = normalizePhone(String(args.phone || conv.contactPhone || ""));
+          if (phone) conv.contactPhone = phone;
+          // bookWalkthrough saved it (with the GHL appointment id) — load that, don't overwrite it
+          const fresh: any = await AiConversation.findOne({ contactId: conv.contactId }).select("walkthrough").lean();
+          if (fresh?.walkthrough) {
+            conv.walkthrough = fresh.walkthrough;
+            conv.markModified("walkthrough");
+          }
         }
         return r;
       }
@@ -1266,7 +1359,15 @@ const AVAILABILITY_CLAIM =
 const claimsAvailability = (text: string) => AVAILABILITY_CLAIM.test(text);
 const checkedThisTurn = (st: TurnState) =>
   st.toolsUsed.some((t) =>
-    ["check_venue_availability", "check_table_availability", "find_open_venue_dates", "check_booking", "create_booking_draft"].includes(t)
+    [
+      "check_venue_availability",
+      "check_table_availability",
+      "find_open_venue_dates",
+      "check_booking",
+      "create_booking_draft",
+      "check_walkthrough",
+      "book_walkthrough"
+    ].includes(t)
   );
 
 const runModel = async (conv: IAiConversation, st: TurnState): Promise<string> => {

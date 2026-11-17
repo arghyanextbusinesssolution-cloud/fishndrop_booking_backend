@@ -20,7 +20,8 @@ export type GHLWebhookKey =
   | "ticketPurchased"
   | "bookingSync"
   | "aiReply"
-  | "aiHandoff";
+  | "aiHandoff"
+  | "aiWalkthrough";
 
 interface WebhookDefinition {
   envVars: string[];
@@ -81,6 +82,12 @@ const WEBHOOKS: Record<GHLWebhookKey, WebhookDefinition> = {
   // AI assistant → staff: human / call-back requests (action "human_call_requested"), same webhook as AI replies
   aiHandoff: {
     envVars: ["GHL_AI_HANDOFF_WEBHOOK_URL"],
+    fallback: `${HOOK_BASE}/5bd6e536-98a1-401e-ac09-489e4eabc593`
+  },
+  // AI assistant → walkthrough booked in the DM (event "walkthrough_booking": name, phone, date & time) — GHL creates the appointment.
+  // Defaults to the AI webhook (branch on event); set GHL_WALKTHROUGH_WEBHOOK_URL to send it to its own workflow.
+  aiWalkthrough: {
+    envVars: ["GHL_WALKTHROUGH_WEBHOOK_URL", "GHL_AI_HANDOFF_WEBHOOK_URL"],
     fallback: `${HOOK_BASE}/5bd6e536-98a1-401e-ac09-489e4eabc593`
   }
 };

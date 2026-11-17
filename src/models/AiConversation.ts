@@ -79,6 +79,8 @@ export interface IAiConversation extends Document {
   contactPhone?: string;
   hold?: IAiHold;
   draft?: IAiDraftRef;
+  /** Walkthrough the AI sent to GHL (event "walkthrough_booking"). */
+  walkthrough?: { date: string; time: string; requestedAt: Date; status: "requested" | "booked"; appointmentId?: string };
   callback?: {
     phone?: string;
     reason?: string;
@@ -138,6 +140,13 @@ const aiConversationSchema = new Schema<IAiConversation>(
       bookingId: String,
       paymentStatus: String,
       notedStatus: String
+    },
+    walkthrough: {
+      date: String,
+      time: String,
+      requestedAt: Date,
+      status: { type: String, enum: ["requested", "booked"] },
+      appointmentId: String
     },
     callback: {
       phone: String,

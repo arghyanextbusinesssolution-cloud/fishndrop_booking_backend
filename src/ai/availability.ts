@@ -66,7 +66,7 @@ export const priceQuote = (
   if (extraHours) parts.push(`${extraHours} extra hour${extraHours > 1 ? "s" : ""} × $${p.extraHourPrice} = ${usd(extraHoursCost)}`);
   if (djCost) parts.push(`DJ ${usd(djCost)}`);
   if (photoCost) parts.push(`photography (${photographerHours}h) ${usd(photoCost)}`);
-  const customerLine = `${parts.join(", plus ")}, so ${usd(total)} total. A ${usd(deposit)} deposit locks in your date; the remaining ${usd(total - deposit)} is due 72 hours before the event.`;
+  const customerLine = `${parts.join(", plus ")}, so ${usd(total)} total. A minimum ${usd(deposit)} deposit locks in your date; the remaining ${usd(total - deposit)} is due 72 hours before the event.`;
   return {
     guests,
     billableGuests,

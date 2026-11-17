@@ -304,6 +304,18 @@ export const scanTicket = async (req: Request, res: Response, next: NextFunction
         res.status(400).json({ success: false, code: "BOOKING_CANCELLED", message: "This private event booking was cancelled." });
         return;
       }
+      // Party not confirmed yet (e.g. Zelle screenshot still being verified) → passes aren't valid at the door
+      if (booking && booking.status !== "confirmed" && !["deposit_paid", "paid"].includes(booking.paymentStatus)) {
+        res.status(400).json({
+          success: false,
+          code: "BOOKING_NOT_CONFIRMED",
+          message:
+            booking.paymentMethod === "zelle"
+              ? `NOT CONFIRMED: ${booking.customerName || "The host"}'s Zelle payment hasn't been verified yet. Check with a manager.`
+              : `NOT CONFIRMED: ${booking.customerName || "The host"}'s booking isn't paid yet. Check with a manager.`
+        });
+        return;
+      }
 
       if (guestPass.checkedIn) {
         const checkInTime = guestPass.checkedInAt

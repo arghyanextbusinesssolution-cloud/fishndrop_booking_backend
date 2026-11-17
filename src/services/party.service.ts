@@ -50,9 +50,8 @@ const tropicaInvitable = (b: any): boolean =>
   !!b &&
   b.bookingType === "private_event" &&
   b.status !== "cancelled" &&
-  (b.status === "confirmed" ||
-    ["deposit_paid", "paid"].includes(b.paymentStatus) ||
-    (b.paymentMethod === "zelle" && !!b.zelleProofUrl));
+  // Verified payments only — an unverified Zelle screenshot doesn't confirm the booking
+  (b.status === "confirmed" || ["deposit_paid", "paid"].includes(b.paymentStatus));
 
 export const partyFromTropica = (b: any): Party => ({
   kind: "tropica",

@@ -23,14 +23,15 @@ const sanitizeString = (value: unknown): string =>
 
 
 
-/** Invites only work for live, paid (or Zelle-proof-submitted) private bookings. */
+/**
+ * Invites (and guest QR passes) only work once the payment is VERIFIED. A Zelle screenshot alone isn't enough —
+ * the booking stays "not confirmed" until the team verifies the transfer.
+ */
 const isInvitable = (b: any): boolean =>
   !!b &&
   b.bookingType === "private_event" &&
   b.status !== "cancelled" &&
-  (b.status === "confirmed" ||
-    ["deposit_paid", "paid"].includes(b.paymentStatus) ||
-    (b.paymentMethod === "zelle" && !!b.zelleProofUrl));
+  (b.status === "confirmed" || ["deposit_paid", "paid"].includes(b.paymentStatus));
 
 /** Optional auth: who is viewing (no 401 for anonymous guests). */
 const optionalUserId = (req: Request): string | null => {
@@ -357,6 +358,14 @@ export const getBookingGuestPasses = async (req: Request, res: Response, next: N
                 total: party.doc.customerPrice,
                 paid: party.doc.amountPaid,
                 remaining: party.doc.remainingAmount
+              }
+            : undefined,
+        // Tropica bookings paid by Zelle: the host sees "not confirmed — verifying your Zelle" until staff verify it
+        zelle:
+          party.kind === "tropica" && party.doc.paymentMethod === "zelle" && !party.invitable && party.doc.status !== "cancelled"
+            ? {
+                state: ["mismatched", "manual_review"].includes(party.doc.zelleVerificationStatus) ? "review" : "verifying",
+                amount: party.doc.depositAmount || party.doc.totalAmount || 0
               }
             : undefined
       },
