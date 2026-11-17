@@ -2,8 +2,9 @@ import logger from "../config/logger";
 
 /**
  * Minimal chat-completions client (OpenAI-compatible API) with tool calling.
- * Tries in order: Groq GROQ_MODEL (default openai/gpt-oss-120b) → Gemini GEMINI_MODEL (default gemini-3.1-flash-lite then gemini-3-flash-preview,
- * key GEMINI_API_KEY) → Groq GROQ_FALLBACK_MODEL (default openai/gpt-oss-20b). Each provider is skipped when its key is missing.
+ * Tries every free-tier model one by one until one answers: Groq GROQ_MODEL list → Gemini GEMINI_MODEL list →
+ * Groq GROQ_FALLBACK_MODEL list (all comma-separated). Models out of quota / busy are skipped for a while (cooldown).
+ * A provider is skipped entirely when its key (GROQ_API_KEY / GEMINI_API_KEY) is missing.
  */
 
 export interface ChatToolCall {
@@ -27,14 +28,39 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export const getGroqModel = () => process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b";
-const getFallbackModel = () => process.env.GROQ_FALLBACK_MODEL?.trim() || "openai/gpt-oss-20b";
-/** Comma-separated list, tried in order (one may be busy while another answers). */
-const getGeminiModels = () =>
-  (process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite,gemini-3-flash-preview")
+/** Comma-separated env list → model ids, tried in order. */
+const list = (v: string | undefined, fallback: string) =>
+  (v?.trim() || fallback)
     .split(",")
     .map((m) => m.trim())
     .filter(Boolean);
+
+// Every free-tier model that supports tool calling (checked Nov 2026). Override with GROQ_MODEL / GEMINI_MODEL / GROQ_FALLBACK_MODEL.
+const getGroqModels = () => list(process.env.GROQ_MODEL, "openai/gpt-oss-120b,qwen/qwen3.8-27b");
+const getGeminiModels = () =>
+  list(
+    process.env.GEMINI_MODEL,
+    "gemini-3.1-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview,gemini-flash-latest,gemini-3.1-pro-preview,gemini-pro-latest"
+  );
+const getGroqFallbackModels = () => list(process.env.GROQ_FALLBACK_MODEL, "openai/gpt-oss-20b");
+export const getGroqModel = () => getGroqModels()[0];
+
+/**
+ * Models that just failed are skipped for a while so each customer message doesn't wait on dead ends:
+ * daily quota used up → 30 min, busy/rate-limited → 1 min, model not available → 24 h.
+ */
+const cooldownUntil = new Map<string, number>();
+const coolDown = (p: Provider, err: string) => {
+  const mins = /no longer available|not found|not supported|404/i.test(err)
+    ? 24 * 60
+    : /per day|TPD|RPD|quota/i.test(err)
+      ? 30
+      : /429|503|high demand|overloaded|timed out/i.test(err)
+        ? 1
+        : 0;
+  if (mins) cooldownUntil.set(`${p.name}:${p.model}`, Date.now() + mins * 60 * 1000);
+};
+const isCooling = (p: Provider) => (cooldownUntil.get(`${p.name}:${p.model}`) || 0) > Date.now();
 /** True when at least one AI provider (Groq or Gemini) has a key. */
 export const isGroqConfigured = () => Boolean(process.env.GROQ_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
 
@@ -45,14 +71,18 @@ interface Provider {
   model: string;
 }
 
-/** Order: Groq main model → Gemini → Groq fallback model (only the ones with a key). */
+/** Order: Groq models → every Gemini model → Groq fallback models (only providers with a key). */
 const providerChain = (): Provider[] => {
   const groqKey = process.env.GROQ_API_KEY?.trim();
   const geminiKey = process.env.GEMINI_API_KEY?.trim();
   const chain: Provider[] = [];
-  if (groqKey) chain.push({ name: "groq", url: GROQ_URL, key: groqKey, model: getGroqModel() });
-  if (geminiKey) for (const model of getGeminiModels()) chain.push({ name: "gemini", url: GEMINI_URL, key: geminiKey, model });
-  if (groqKey && getFallbackModel() !== getGroqModel()) chain.push({ name: "groq", url: GROQ_URL, key: groqKey, model: getFallbackModel() });
+  const add = (name: Provider["name"], url: string, key: string | undefined, models: string[]) => {
+    if (!key) return;
+    for (const model of models) if (!chain.some((c) => c.name === name && c.model === model)) chain.push({ name, url, key, model });
+  };
+  add("groq", GROQ_URL, groqKey, getGroqModels());
+  add("gemini", GEMINI_URL, geminiKey, getGeminiModels());
+  add("groq", GROQ_URL, groqKey, getGroqFallbackModels());
   return chain;
 };
 
@@ -64,14 +94,20 @@ export const groqChat = async (
   const chain = providerChain();
   if (!chain.length) throw new Error("No AI provider configured (GROQ_API_KEY / GEMINI_API_KEY)");
 
+  // Skip models that are cooling down — unless every model is, then try them all anyway
+  const ready = chain.filter((p) => !isCooling(p));
+  const order = ready.length ? ready : chain;
+
   let lastErr = "";
-  for (const p of chain) {
+  for (const p of order) {
     try {
       const r = await callModel(p, messages, tools, opts);
-      if (p !== chain[0]) console.log(`[AI] ✅ Answered by fallback ${p.name} (${p.model})`);
+      cooldownUntil.delete(`${p.name}:${p.model}`);
+      if (p !== chain[0]) console.log(`[AI] ✅ Answered by ${p.name} (${p.model})`);
       return r;
     } catch (err: any) {
       lastErr = err?.message || String(err);
+      coolDown(p, lastErr);
       logger.warn("[AI] model failed, trying next provider", { provider: p.name, model: p.model, error: lastErr.slice(0, 200) });
     }
   }
@@ -115,6 +151,8 @@ const callModel = async (
     body.reasoning_effort = process.env.GROQ_REASONING_EFFORT?.trim() || "low";
     body.include_reasoning = false;
   }
+  // Qwen thinks out loud by default — keep the thinking out of the customer's reply
+  if (model.startsWith("qwen/")) body.reasoning_format = "hidden";
   if (p.name === "gemini") body.reasoning_effort = process.env.GEMINI_REASONING_EFFORT?.trim() || "low";
   if (tools?.length) {
     body.tools = tools;
@@ -125,7 +163,7 @@ const callModel = async (
   let lastErr = "";
   for (let attempt = 1; attempt <= 3; attempt++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25000);
+    const timer = setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(p.url, {
         method: "POST",
@@ -149,7 +187,9 @@ const callModel = async (
       await sleep(Math.min(8000, retryAfter * 1000 || 700 * attempt));
     } catch (err: any) {
       if (err?.fatal) throw err;
-      lastErr = err?.name === "AbortError" ? `${label} request timed out` : err?.message || String(err);
+      // A hung model: don't keep the customer waiting — move on to the next model right away
+      if (err?.name === "AbortError") throw new Error(`${label} request timed out (${model})`);
+      lastErr = err?.message || String(err);
       await sleep(700 * attempt);
     } finally {
       clearTimeout(timer);
