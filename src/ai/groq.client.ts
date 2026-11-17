@@ -2,7 +2,7 @@ import logger from "../config/logger";
 
 /**
  * Minimal chat-completions client (OpenAI-compatible API) with tool calling.
- * Tries in order: Groq GROQ_MODEL (default openai/gpt-oss-120b) → Gemini GEMINI_MODEL (default gemini-3-flash-preview then gemini-3.1-flash-lite,
+ * Tries in order: Groq GROQ_MODEL (default openai/gpt-oss-120b) → Gemini GEMINI_MODEL (default gemini-3.1-flash-lite then gemini-3-flash-preview,
  * key GEMINI_API_KEY) → Groq GROQ_FALLBACK_MODEL (default openai/gpt-oss-20b). Each provider is skipped when its key is missing.
  */
 
@@ -31,7 +31,7 @@ export const getGroqModel = () => process.env.GROQ_MODEL?.trim() || "openai/gpt-
 const getFallbackModel = () => process.env.GROQ_FALLBACK_MODEL?.trim() || "openai/gpt-oss-20b";
 /** Comma-separated list, tried in order (one may be busy while another answers). */
 const getGeminiModels = () =>
-  (process.env.GEMINI_MODEL?.trim() || "gemini-3-flash-preview,gemini-3.1-flash-lite")
+  (process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite,gemini-3-flash-preview")
     .split(",")
     .map((m) => m.trim())
     .filter(Boolean);
