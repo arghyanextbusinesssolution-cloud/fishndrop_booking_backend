@@ -3,7 +3,7 @@ import logger from "../config/logger";
 /**
  * Minimal chat-completions client (OpenAI-compatible API) with tool calling.
  * Tries every free-tier model one by one until one answers: Groq GROQ_MODEL list → Gemini GEMINI_MODEL list →
- * Groq GROQ_FALLBACK_MODEL list (all comma-separated). Models out of quota / busy are skipped for a while (cooldown).
+ * Groq GROQ_FALLBACK_MODEL list → OpenAI OPENAI_MODEL list (last resort, key OPENAI_API_KEY) (all comma-separated). Models out of quota / busy are skipped for a while (cooldown).
  * A provider is skipped entirely when its key (GROQ_API_KEY / GEMINI_API_KEY) is missing.
  */
 
@@ -26,6 +26,8 @@ export interface ChatTool {
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 // Gemini's OpenAI-compatible endpoint (same request/response shape, incl. tool calls)
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+// Last resort when every Groq + Gemini model failed (paid key — only used then)
+const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Comma-separated env list → model ids, tried in order. */
@@ -43,6 +45,7 @@ const getGeminiModels = () =>
     "gemini-3.1-flash-lite,gemini-flash-lite-latest,gemini-3-flash-preview,gemini-flash-latest,gemini-3.1-pro-preview,gemini-pro-latest"
   );
 const getGroqFallbackModels = () => list(process.env.GROQ_FALLBACK_MODEL, "openai/gpt-oss-20b");
+const getOpenAiModels = () => list(process.env.OPENAI_MODEL, "gpt-4.1-mini,gpt-4o-mini");
 export const getGroqModel = () => getGroqModels()[0];
 
 /**
@@ -61,11 +64,12 @@ const coolDown = (p: Provider, err: string) => {
   if (mins) cooldownUntil.set(`${p.name}:${p.model}`, Date.now() + mins * 60 * 1000);
 };
 const isCooling = (p: Provider) => (cooldownUntil.get(`${p.name}:${p.model}`) || 0) > Date.now();
-/** True when at least one AI provider (Groq or Gemini) has a key. */
-export const isGroqConfigured = () => Boolean(process.env.GROQ_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim());
+/** True when at least one AI provider (Groq, Gemini or OpenAI) has a key. */
+export const isGroqConfigured = () =>
+  Boolean(process.env.GROQ_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim());
 
 interface Provider {
-  name: "groq" | "gemini";
+  name: "groq" | "gemini" | "openai";
   url: string;
   key: string;
   model: string;
@@ -83,6 +87,7 @@ const providerChain = (): Provider[] => {
   add("groq", GROQ_URL, groqKey, getGroqModels());
   add("gemini", GEMINI_URL, geminiKey, getGeminiModels());
   add("groq", GROQ_URL, groqKey, getGroqFallbackModels());
+  add("openai", OPENAI_URL, process.env.OPENAI_API_KEY?.trim(), getOpenAiModels()); // last resort
   return chain;
 };
 
@@ -132,6 +137,14 @@ const withThoughtSignatures = (messages: ChatMessage[]): ChatMessage[] =>
       : m
   );
 
+/** Tool calls without provider-specific extras (OpenAI only accepts id / type / function). */
+const withoutExtraContent = (messages: ChatMessage[]): ChatMessage[] =>
+  messages.map((m) =>
+    m.role === "assistant" && m.tool_calls?.length
+      ? { ...m, tool_calls: m.tool_calls.map((tc) => ({ id: tc.id, type: tc.type, function: tc.function })) }
+      : m
+  );
+
 const callModel = async (
   p: Provider,
   messages: ChatMessage[],
@@ -139,14 +152,16 @@ const callModel = async (
   opts: { temperature?: number; maxTokens?: number }
 ): Promise<{ content: string | null; toolCalls: ChatToolCall[] }> => {
   const { model } = p;
-  const label = p.name === "gemini" ? "Gemini" : "Groq";
+  const label = p.name === "gemini" ? "Gemini" : p.name === "openai" ? "OpenAI" : "Groq";
   const body: Record<string, unknown> = {
     model,
-    messages: p.name === "gemini" ? withThoughtSignatures(messages) : messages,
-    temperature: opts.temperature ?? 0.3,
-    // reasoning models spend tokens thinking before they answer
-    max_tokens: opts.maxTokens ?? (p.name === "gemini" ? 4000 : 2000)
+    // OpenAI rejects Gemini's extra_content on tool calls → strip it; Gemini needs thought signatures
+    messages: p.name === "gemini" ? withThoughtSignatures(messages) : p.name === "openai" ? withoutExtraContent(messages) : messages,
+    temperature: opts.temperature ?? 0.3
   };
+  // reasoning models spend tokens thinking before they answer
+  if (p.name === "openai") body.max_completion_tokens = opts.maxTokens ?? 2000;
+  else body.max_tokens = opts.maxTokens ?? (p.name === "gemini" ? 4000 : 2000);
   if (model.startsWith("openai/gpt-oss")) {
     body.reasoning_effort = process.env.GROQ_REASONING_EFFORT?.trim() || "low";
     body.include_reasoning = false;
@@ -157,7 +172,7 @@ const callModel = async (
   if (tools?.length) {
     body.tools = tools;
     body.tool_choice = "auto";
-    if (p.name === "groq") body.parallel_tool_calls = false;
+    if (p.name !== "gemini") body.parallel_tool_calls = false;
   }
 
   let lastErr = "";
