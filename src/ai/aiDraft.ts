@@ -369,11 +369,20 @@ export const getChatBookingPayment = async (contactId: string) => {
     .lean();
   if (!b) return { ok: false, error: "Booking record not found — offer the team." };
 
-  const verified = (b.paymentBreakdown || []).filter((p: any) => p.status === "verified").reduce((s: number, p: any) => s + (p.amount || 0), 0);
+  const fromBreakdown = (b.paymentBreakdown || []).filter((p: any) => p.status === "verified").reduce((s: number, p: any) => s + (p.amount || 0), 0);
+  // Card payments made on the website don't always add a breakdown entry — trust the booking's own status then
+  const verified =
+    fromBreakdown ||
+    (b.paymentStatus === "paid" ? b.totalAmount || 0 : b.paymentStatus === "deposit_paid" ? b.depositAmount || 0 : 0);
   const pending = (b.paymentBreakdown || []).filter((p: any) => p.status === "pending").reduce((s: number, p: any) => s + (p.amount || 0), 0);
   const stripeOnly = b.paymentStatus === "pending_payment" && b.paymentMethod !== "zelle" ? await stripePaidAmount(bookingId) : 0;
   const date = new Date(b.bookingDate).toISOString().slice(0, 10);
-  const balance = Math.max(0, (b.totalAmount || 0) - verified);
+  const balance =
+    b.paymentStatus === "paid" || b.remainingPaymentStatus === "paid"
+      ? 0
+      : typeof b.remainingAmount === "number" && verified > 0
+        ? Math.max(0, b.remainingAmount)
+        : Math.max(0, (b.totalAmount || 0) - verified);
 
   let summary: string;
   if (b.status === "cancelled") summary = "This booking was cancelled.";

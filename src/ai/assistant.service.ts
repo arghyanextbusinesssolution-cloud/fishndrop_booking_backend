@@ -338,7 +338,7 @@ const TOOLS: ChatTool[] = [
     function: {
       name: "request_human_help",
       description:
-        "Hand the customer to the Tropica team for a phone call: they ask for a person/agent/manager/call, are upset, want a discount or custom deal, ask about an existing booking, change, cancellation, refund or payment problem, or ask something not in the approved facts. FIRST get their mobile number (ask, or confirm the one on file) and pass it as phone. Only if they refuse to share a number, call it without phone.",
+        "Hand the customer to the Tropica team for a phone call: they ask for a person/agent/manager/call, are upset, want a discount or custom deal, ask about an existing booking, change, cancellation, refund or payment problem, or ask something not in the approved facts. NEVER for greetings ('hi', 'hello') or normal questions you can answer. FIRST get their mobile number (ask, or confirm the one on file) and pass it as phone. Only if they refuse to share a number, call it without phone.",
       parameters: {
         type: "object",
         properties: {
@@ -590,7 +590,7 @@ WALKTHROUGH: ${
   }
 CALLBACK: ${
     c.callback?.requestedAt && Date.now() - new Date(c.callback.requestedAt).getTime() < 24 * 3600 * 1000
-      ? `already requested ${Math.round((Date.now() - new Date(c.callback.requestedAt).getTime()) / 60000)} min ago${c.callback.phone ? ` — team will call ${formatPhone(c.callback.phone)}` : " (reply in chat)"}. Keep helping normally (prices, add-ons, details, booking). Don't ask for their number or a call time again, and don't re-request it. If they ask when/whether they'll be called, answer exactly like: "Our team has your request and will call you${c.callback.phone ? ` at ${formatPhone(c.callback.phone)}` : ""} as soon as they're available. Need it sooner? Call us at ${CONTACT.phone}." Then offer to keep helping.`
+      ? `already requested ${Math.round((Date.now() - new Date(c.callback.requestedAt).getTime()) / 60000)} min ago${c.callback.phone ? ` — team will call ${formatPhone(c.callback.phone)}` : " (reply in chat)"}. Keep helping normally (prices, add-ons, details, booking). A greeting ("hi", "hello", "hey") gets a normal friendly reply like "Hi! How can I help you today?" — don't mention the callback or the team unless they ask. If they clearly ask for a person / support / a call / a manager again (e.g. "talk to a real person", "I need support", "call me"), you MUST call request_human_help first (it reminds the team — no new callback is created), then reassure them. Never call it for greetings or questions you can answer. Don't ask for their number or a call time again, and don't re-request it. If they ask when/whether they'll be called, answer exactly like: "Our team has your request and will call you${c.callback.phone ? ` at ${formatPhone(c.callback.phone)}` : ""} as soon as they're available. Need it sooner? Call us at ${CONTACT.phone}." Then offer to keep helping.`
       : "none"
   }
 ${
@@ -667,6 +667,8 @@ interface TurnState {
   stage?: AiInquiryStage;
   handoff?: { reason: string; urgent: boolean; phone?: string; bestTime?: string };
   draftCreated?: boolean;
+  /** Customer explicitly asked for a person again while a callback is open → follow-up alert to staff. */
+  followUp?: { reason: string };
   /** Live status of the real booking made from this chat (refreshed every message). */
   booking?: any;
   toolsUsed: string[];
@@ -950,6 +952,13 @@ const runTool = async (name: string, rawArgs: string, st: TurnState): Promise<un
         const open = conv.callback?.requestedAt && Date.now() - new Date(conv.callback.requestedAt).getTime() < 24 * 3600 * 1000;
         const samePhone = !args.phone || normalizePhone(String(args.phone)) === conv.callback?.phone;
         if (open && samePhone && !args.urgent) {
+          // They explicitly asked for a person AGAIN → remind the team (max every 15 min), no new callback
+          const last = conv.callback?.lastFollowUpAt || conv.callback?.requestedAt;
+          if (!last || Date.now() - new Date(last).getTime() > 15 * 60 * 1000) {
+            conv.callback = { ...(conv.callback || {}), lastFollowUpAt: new Date() };
+            conv.markModified("callback");
+            st.followUp = { reason };
+          }
           return {
             ok: true,
             alreadyRequested: true,
@@ -1100,33 +1109,10 @@ const handle = async (m: InboundMessage): Promise<AssistantResult> => {
     conv.stage = "collecting_details";
   }
 
-  // Waiting for a callback the AI requested → keep answering (pricing, add-ons, details…). The callback request
-  // stays open for the team, who get a throttled heads-up that the customer wrote again. Only a STAFF takeover silences the AI.
+  // Waiting for a callback the AI requested → the AI simply keeps answering (hi, prices, add-ons…).
+  // No human-assistance alert here: the team is only alerted again if the customer ASKS for a person
+  // again (request_human_help → follow-up alert). Only a STAFF takeover silences the AI.
   if (conv.aiPaused && conv.pausedBy === "ai") {
-    const lastNudge = conv.callback?.lastFollowUpAt || conv.callback?.requestedAt || conv.pausedAt;
-    if (!lastNudge || Date.now() - new Date(lastNudge).getTime() > 30 * 60 * 1000) {
-      conv.callback = { ...(conv.callback || {}), lastFollowUpAt: new Date() };
-      conv.markModified("callback");
-      const wantsCall = Boolean(conv.callback?.phone);
-      void notifyGHL(wantsCall ? "ai_human_call_requested" : "ai_handoff_requested", {
-        ...crmPayload(conv),
-        action: wantsCall ? "human_call_requested" : "human_chat_requested",
-        actionLabel: "Customer wrote again while waiting for the team (AI is answering)",
-        followUp: true,
-        humanRequested: "yes",
-        callRequested: wantsCall ? "yes" : "no",
-        callbackPhone: conv.callback?.phone || "",
-        callbackPhoneFormatted: conv.callback?.phone ? formatPhone(conv.callback.phone) : "",
-        callbackBestTime: conv.callback?.bestTime || "",
-        callbackReason: conv.callback?.reason || conv.pausedReason || "",
-        urgent: false,
-        requestedAt: new Date().toISOString(),
-        lastCustomerMessage: text,
-        messageType: ghlMessageType(conv.channel) || "",
-        handoff: true,
-        handoffText: "yes"
-      });
-    }
     conv.aiPaused = false;
     conv.pausedAt = undefined;
     conv.pausedBy = undefined;
@@ -1274,6 +1260,28 @@ const handle = async (m: InboundMessage): Promise<AssistantResult> => {
         handoffText: "yes"
       });
     })().catch((err) => logger.error("[AI] handoff notify failed", { error: err?.message }));
+  } else if (st.followUp) {
+    // Only when the customer explicitly asked for a person again (not for "hi" or other questions)
+    const wantsCall = Boolean(conv.callback?.phone);
+    void notifyGHL(wantsCall ? "ai_human_call_requested" : "ai_handoff_requested", {
+      ...crmPayload(conv),
+      action: wantsCall ? "human_call_requested" : "human_chat_requested",
+      actionLabel: "Customer asked for a person again (callback already requested)",
+      followUp: true,
+      humanRequested: "yes",
+      callRequested: wantsCall ? "yes" : "no",
+      callbackPhone: conv.callback?.phone || "",
+      callbackPhoneFormatted: conv.callback?.phone ? formatPhone(conv.callback.phone) : "",
+      callbackBestTime: conv.callback?.bestTime || "",
+      callbackReason: st.followUp.reason || conv.callback?.reason || "",
+      urgent: false,
+      requestedAt: new Date().toISOString(),
+      lastCustomerMessage: text,
+      messageType: ghlMessageType(conv.channel) || "",
+      reply: reply || "",
+      handoff: true,
+      handoffText: "yes"
+    });
   } else if (conv.stage !== prevStage) {
     void notifyGHL("ai_inquiry_update", crmPayload(conv));
   }
