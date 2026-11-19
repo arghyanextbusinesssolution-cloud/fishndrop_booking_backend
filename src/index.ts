@@ -24,6 +24,7 @@ import checkinRoutes from "./routes/checkin.routes";
 import guestPassRoutes from "./routes/guestPass.routes";
 import placesRoutes from "./routes/places.routes";
 import aiRoutes from "./routes/ai.routes";
+import inquiryRoutes from "./routes/inquiry.routes";
 import marketplaceRoutes from "./routes/marketplace.routes";
 import marketplaceAdminRoutes from "./routes/marketplaceAdmin.routes";
 import Booking from "./models/Booking";
@@ -132,6 +133,7 @@ app.use(express.urlencoded({ extended: false, limit: "10mb" }));
 
 app.use("/api/auth", authRoutes);
 app.use("/api/bookings", bookingRoutes);
+app.use("/api/inquiries", inquiryRoutes); // homepage assistant bubble → GHL lead
 app.use("/bookings", bookingRoutes);
 app.use("/api/admin/financials", financialsRoutes);
 app.use("/api/admin/marketplace", marketplaceAdminRoutes);
