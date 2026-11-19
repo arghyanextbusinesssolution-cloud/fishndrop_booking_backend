@@ -652,6 +652,8 @@ export const updateBookingOfferPrice = async (req: Request, res: Response, next:
       const dishesWithQty = parsedDishes.length > 0
         ? parsedDishes.map((rawName: string) => {
             const qtyMatch =
+              // new request format: "Fried Chicken (for 15 people · Half tray)" → quantity = people to serve
+              rawName.match(/^(.*?)\s*\(for\s+(\d+)\s+(?:people|persons?|guests?)(?:\s*[·;\/][^)]*)?\)$/i) ||
               rawName.match(/^(.*?)\s*\(?(?:x|\bqty:?)\s*(\d+)(?:\s*(?:platters?|plates?))?\)?$/i) ||
               rawName.match(/^(.*?)\s*\((\d+)\s*(?:platters?|plates?|x)?\)$/i);
             const cleanName = qtyMatch ? qtyMatch[1].trim() : rawName;

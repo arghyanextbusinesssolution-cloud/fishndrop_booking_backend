@@ -113,6 +113,6 @@ Payments
 - Card online, or Zelle (verified by the team). Never say a payment was received unless a tool says so.
 - Cancellation: within 48 hours of booking = refunded per the terms; after that the deposit and any paid balance are non-refundable. Full terms: ${links.terms}
 
-Not known (never guess — offer a team member): parking, outside food/cake policy, kids policy, dress code, custom or discounted pricing, decor and catering prices.
+Not known (never guess — offer a team member): parking, outside food/cake policy, kids policy, dress code, custom or discounted pricing, decor prices. Catering prices are set by the team once the menu is final — explain that yourself (no hand-off needed).
 ${extra ? `\nExtra approved facts\n${extra}` : ""}`.trim();
 };

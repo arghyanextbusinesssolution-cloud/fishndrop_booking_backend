@@ -25,6 +25,13 @@ export interface IAiBookingDraft extends Document {
   needDj: boolean;
   needPhotographer: boolean;
   photographerHours: number;
+  /** Partner catering chosen in the chat — same format as a website booking (ids comma-separated + dish names). */
+  cateringMenu?: string;
+  selectedDishes?: string[];
+  /** People each dish should serve + optional portion style + special instructions */
+  dishPeople?: Record<string, number>;
+  dishPortions?: Record<string, string>;
+  cateringNotes?: string;
   fullName?: string;
   phone?: string;
   email?: string;
@@ -63,6 +70,11 @@ const draftSchema = new Schema<IAiBookingDraft>(
     needDj: { type: Boolean, default: false },
     needPhotographer: { type: Boolean, default: false },
     photographerHours: { type: Number, default: 0 },
+    cateringMenu: String,
+    selectedDishes: [String],
+    dishPeople: { type: Map, of: Number },
+    dishPortions: { type: Map, of: String },
+    cateringNotes: { type: String, maxlength: 500 },
     fullName: String,
     phone: String,
     email: String,

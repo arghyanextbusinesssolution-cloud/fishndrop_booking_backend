@@ -32,7 +32,7 @@ const formatPhone = (e164: string): string => {
 import { cancelAiHold, checkAiHoldPayment, createAiVenueHold } from "./aiBooking";
 import { cancelDraftsFor, checkDraft, createDraft, getChatBookingPayment } from "./aiDraft";
 import { bookWalkthrough, checkWalkthrough } from "./walkthrough";
-import { getCateringMenu } from "./cateringMenu";
+import { chooseCatering, getCateringMenu } from "./cateringMenu";
 
 /**
  * Tropica AI booking assistant — turns one inbound social message into one reply.
@@ -66,6 +66,16 @@ export interface AssistantResult {
   notes?: string;
 }
 
+/** "Golden Southern Fried Chicken for 15 people (half tray), … — notes: 2 nut allergies" */
+const PORTION_WORDS: Record<string, string> = { individual: "individual servings", half_tray: "half tray", full_tray: "full tray" };
+const cateringSummary = (i: { dishes?: string[]; cateringItems?: { name: string; people: number; portion: string }[]; cateringNotes?: string }) => {
+  const items = i.cateringItems?.length ? i.cateringItems : (i.dishes || []).map((name) => ({ name, people: 0, portion: "" }));
+  const list = items
+    .map((it) => `${it.name}${it.people ? ` for ${it.people} people` : ""}${it.portion ? ` (${PORTION_WORDS[it.portion] || it.portion})` : ""}`)
+    .join(", ");
+  return `${list}${i.cateringNotes ? ` — notes: ${i.cateringNotes}` : ""}`;
+};
+
 /** One plain-text note for staff: everything known about this chat's event, quote, booking and callback. */
 export const buildAiNotes = (conv: IAiConversation): string => {
   const i = conv.inquiry || {};
@@ -80,6 +90,7 @@ export const buildAiNotes = (conv: IAiConversation): string => {
   if (i.guests) lines.push(`Guests: ${i.guests}${i.seating ? ` (${i.seating})` : ""}`);
   const addOns = [i.dj ? "DJ" : "", i.photographer ? `Photography${i.photographerHours ? ` ${i.photographerHours}h` : ""}` : ""].filter(Boolean);
   if (addOns.length) lines.push(`Add-ons: ${addOns.join(", ")}`);
+  if (i.dishes?.length) lines.push(`Catering request (quote to be sent by the team): ${cateringSummary(i)}`);
   if (conv.draft?.code) lines.push(`Quote: $${conv.draft.total} total, $${conv.draft.deposit} deposit`, `Checkout link: ${conv.draft.checkoutUrl}`);
   if (conv.callback?.requestedAt) {
     lines.push(
@@ -283,6 +294,35 @@ const TOOLS: ChatTool[] = [
   {
     type: "function",
     function: {
+      name: "choose_catering",
+      description:
+        "Save the customer's CATERING REQUEST (restaurant → dishes → how many people each dish serves → optional portion style → special instructions). Call whenever they pick or change dishes, servings, portions or instructions. Always pass ALL dishes chosen so far.",
+      parameters: {
+        type: "object",
+        properties: {
+          restaurants: { type: "array", items: { type: "string" }, description: "Restaurants or cuisines they chose (optional)" },
+          dishes: {
+            type: "array",
+            description: "Every dish they want",
+            items: {
+              type: "object",
+              properties: {
+                dish: { type: "string", description: "Dish as they said it" },
+                people: { type: "integer", description: "How many people this dish should serve (omit if not said yet)" },
+                portion: { type: "string", enum: ["individual", "half_tray", "full_tray"], description: "Only if they asked for one" }
+              },
+              required: ["dish"]
+            }
+          },
+          special_instructions: { type: "string", description: "Dietary needs, allergies, serving time, etc." }
+        },
+        required: ["dishes"]
+      }
+    }
+  },
+  {
+    type: "function",
+    function: {
       name: "check_walkthrough",
       description:
         "LIVE check for a WALKTHROUGH (venue tour / in-person visit) at a date and time. Without time it lists the open walkthrough times that day. Call before saying a walkthrough time is free. Never use it for event reservations.",
@@ -403,6 +443,7 @@ const knownDetails = (c: IAiConversation): string => {
   if (i.dj) bits.push("wants DJ");
   if (i.photographer) bits.push(`wants photographer${i.photographerHours ? ` ${i.photographerHours}h` : ""}`);
   if (i.intent) bits.push(`intent: ${i.intent}`);
+  if (i.dishes?.length) bits.push(`catering request: ${cateringSummary(i)}`);
   return bits.length ? bits.join(" · ") : "nothing yet";
 };
 
@@ -616,7 +657,9 @@ OPENING
 HOW TO HELP
 - A group that wants the whole space → private venue rental (any size up to capacity; under 10 guests is billed as 10). Someone who only wants a table → check_table_availability.
 - ALREADY BOOKED elsewhere (they say "I already booked / my booking / add a DJ to my party" and there's no EXISTING BOOKING): don't start a new reservation or ask "Shall I reserve it?". Quote just the extra if asked, and offer to have the team add it to their booking (request_human_help with what they want). You can't see bookings made outside this chat.
-- FOOD / MENU / CATERING questions: call get_catering_menu (with the cuisine or restaurant if they named one) and share the real menu — never invent dishes. A full menu may be longer than usual (sections on separate lines, dish names only). Catering is quoted separately (no prices); if they want it, save it in notes and the team quotes it.
+- FOOD / MENU / CATERING questions: call get_catering_menu (with the cuisine or restaurant if they named one) and share the real menu — never invent dishes. A full menu may be longer than usual (sections on separate lines, dish names only). If they ask what a dish is, describe it from the menu's dishDetails.
+- CATERING REQUEST (a separate add-on from the venue booking), one step at a time: 1) restaurant → 2) dishes → 3) how many people each dish should serve (e.g. "fried chicken for 15 people") → 4) optional portion style: individual servings, half tray or full tray (offer once, never require) → 5) special instructions (dietary needs, allergies, serving time — optional). Call choose_catering after each answer (with ALL dishes so far) and confirm back in one line. Never say "platters".
+- CATERING PRICE ("how much is catering?", "price per person?"): answer it yourself — do NOT hand off to the team for this. Say: "Restaurants portion and price differently, so we don't list fixed catering prices. Once you've picked your dishes and how many people each should serve, our team confirms quantities, portions, availability and the total with the restaurant and sends you a separate catering quote by SMS or email to approve. It isn't part of today's deposit. Which dishes would you like?" Never invent a price or promise a portion size.
 - PRICE CHANGED (they add a DJ / photography, change hours or guests): call check_booking (or get_price_quote) again with the new details BEFORE replying and use its new customerLine — never add it up yourself.
 - HOW TO WRITE A QUOTE: use the tool's quote.customerLine wording (it already has the per-person math) — never shorten it to "5-hour base ($1,100)". Always show the per-person math — "$${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours" (under 10 guests: "${10}-guest minimum × $${pricing.perGuestPrice} = $${10 * pricing.perGuestPrice}"), then extra hours ("2 extra hours × $${pricing.extraHourPrice} = $250"), then the total and the minimum $${pricing.minDepositAmount} deposit (always say "minimum"). Example: "That's $${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours, plus 2 extra hours × $${pricing.extraHourPrice} = $250, so $1,350 total. A minimum $${pricing.minDepositAmount} deposit locks in your date; the remaining $1,050 is due 72 hours before the event."
 - OFFER THE EXTRAS ONCE: after the first full quote (guests + hours known), unless DJ / photography / food were already discussed, end that message with ONLY this offer (no reserve/callback/walkthrough choice in the same message — that comes in your next reply): "If you'd like, we can also arrange a DJ, photography or food for your event — just let me know!" Say it as a friendly optional offer, never as a required question. DJ $${pricing.djPrice} (up to 5h), photography $${pricing.photographerBasePrice} for 2h (+$${pricing.photographerExtraHourPrice}/extra hour), food: Jamaican, Mexican or Soul Food catering (quoted separately). If they say no, move on — never ask again.
@@ -649,7 +692,7 @@ HUMAN / CALL REQUESTS ("can I talk to someone", "call me", "real person", "agent
 - Step 2: once they give or confirm a number (and a time if they mention one), call request_human_help with phone (and best_time). If the tool says the number is invalid, ask again politely.
 - Step 3: reply: "Thanks! I've shared your request with our Tropica support manager — they'll call you at <number> as soon as they're available." Add the time if they gave one. If they're planning an event, add once: "If you'd like, you can also schedule a walkthrough."
 - In the reason, include everything known for the team: event date/time, type, guests, seating, total hours (extra hours × $${pricing.extraHourPrice}), estimated subtotal, add-ons, and that they want a callback.
-- Also hand off for: large events over ${pricing.maxGuestCapacity} guests (partner venues), custom catering/decor quotes, payment problems, a founder consultation, or anyone who can't complete their booking. Call them "a Tropica support manager" or "a member of our team" — never an AI or agent.
+- Also hand off for: large events over ${pricing.maxGuestCapacity} guests (partner venues), custom decor quotes or a fully custom menu (NOT for normal catering price questions — answer those yourself), payment problems, a founder consultation, or anyone who can't complete their booking. Call them "a Tropica support manager" or "a member of our team" — never an AI or agent.
 - If they refuse to share a number: call request_human_help without phone and say a team member will reply here in the chat. Urgent: they can call ${CONTACT.phone}.
 - Never promise an exact callback time.
 - Never mention other customers or why a slot is taken.
@@ -819,6 +862,10 @@ const runTool = async (name: string, rawArgs: string, st: TurnState): Promise<un
           dj: args.dj ?? i.dj,
           photographer: args.photographer ?? i.photographer,
           photographer_hours: args.photographer_hours || i.photographerHours,
+          catering_menu: i.cateringMenu,
+          catering_dishes: i.dishes,
+          catering_items: i.cateringItems,
+          catering_notes: i.cateringNotes,
           full_name: args.full_name || conv.contactName,
           phone,
           email: args.email || conv.contactEmail,
@@ -848,6 +895,20 @@ const runTool = async (name: string, rawArgs: string, st: TurnState): Promise<un
       }
       case "get_catering_menu":
         return getCateringMenu({ restaurant: args.restaurant });
+      case "choose_catering": {
+        const r: any = chooseCatering({ restaurants: args.restaurants, dishes: args.dishes, special_instructions: args.special_instructions });
+        if (r.ok) {
+          conv.inquiry = {
+            ...(conv.inquiry || {}),
+            cateringMenu: r.cateringMenu,
+            dishes: r.items.map((i: any) => i.name),
+            cateringItems: r.items,
+            cateringNotes: r.specialInstructions ?? conv.inquiry?.cateringNotes
+          };
+          conv.markModified("inquiry");
+        }
+        return r;
+      }
       case "check_walkthrough": {
         rememberDetails(conv, { intent: conv.inquiry?.intent === "reservation" ? "both" : conv.inquiry?.intent || "walkthrough" });
         return await checkWalkthrough({ date: args.date, time: args.time });
@@ -1019,7 +1080,7 @@ const cleanReply = (text: string): string =>
     .replace(/[ \t]+$/gm, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim()
-    .slice(0, 950);
+    .slice(0, 2800); // long replies (e.g. two menus) are split into several DMs on delivery
 
 /** Used when the AI model is unavailable (e.g. rate limit) — fits what we know about the chat instead of a generic error. */
 const fallbackReply = (conv?: IAiConversation, st?: TurnState) => {

@@ -72,7 +72,7 @@ export const buildBookingPayload = (booking: any, options: GHLPayloadOptions) =>
 
   const restaurantName = resolveRestaurantName(booking.cateringMenu);
   const cateringMenu = booking.cateringMenu || "none";
-  const notes = parseBookingNotes(booking.notes, booking.dishQuantities);
+  const notes = parseBookingNotes(booking.notes, booking.dishQuantities, { dishPortions: (booking as any).dishPortions, cateringFormat: (booking as any).cateringFormat });
 
   const utm = {
     utmSource: booking.utmSource || "",

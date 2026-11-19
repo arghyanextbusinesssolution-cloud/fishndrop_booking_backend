@@ -21,6 +21,18 @@ const LEAD_CONNECTOR_WEBHOOK_URL =
 
 export const MIN_PRIVATE_GUESTS = 10;
 
+const PORTIONS = new Set(["individual", "half_tray", "full_tray"]);
+/** { dish: "half_tray" } — only known portion styles, dish names trimmed (no "." / "$" — Mongo map keys). */
+export const sanitizePortions = (raw: unknown): Record<string, string> => {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [dish, p] of Object.entries(raw as Record<string, unknown>).slice(0, 60)) {
+    const key = sanitizeString(dish).replace(/[.$]/g, "").slice(0, 120);
+    if (key && typeof p === "string" && PORTIONS.has(p)) out[key] = p;
+  }
+  return out;
+};
+
 const sendPrivateBookingLead = async (booking: any, payload: Record<string, any>) => {
   if (!LEAD_CONNECTOR_WEBHOOK_URL) return;
 
@@ -244,6 +256,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
       cateringMenu,
       totalAmount: currentAmount,
       dishQuantities: req.body.dishQuantities || {},
+      // Catering request: people per dish + optional portion style (team confirms with the restaurant)
+      dishPortions: sanitizePortions(req.body.dishPortions),
+      cateringFormat: req.body.cateringFormat === "servings" ? "servings" : undefined,
       complimentaryDrinks: partySize * 2,
       bookingDate: parsedDate,
       bookingTime,
@@ -332,6 +347,18 @@ export const updateBookingMenu = async (req: Request, res: Response, next: NextF
     if (notes !== undefined) {
       booking.notes = notes;
     }
+    // Catering request edits: people per dish + portion style (new format)
+    if (req.body.dishQuantities && typeof req.body.dishQuantities === "object") {
+      const q: Record<string, number> = {};
+      for (const [dish, n] of Object.entries(req.body.dishQuantities as Record<string, unknown>).slice(0, 60)) {
+        const key = sanitizeString(dish).replace(/[.$]/g, "").slice(0, 120);
+        const val = Math.round(Number(n));
+        if (key && val > 0) q[key] = Math.min(500, val);
+      }
+      (booking as any).dishQuantities = q;
+    }
+    if (req.body.dishPortions !== undefined) (booking as any).dishPortions = sanitizePortions(req.body.dishPortions);
+    if (req.body.cateringFormat === "servings") (booking as any).cateringFormat = "servings";
 
     // Extract dish list if formatted like [Dishes: ...]
     let dishesList: string[] = [];

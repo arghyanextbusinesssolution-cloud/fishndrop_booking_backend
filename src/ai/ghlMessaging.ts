@@ -41,24 +41,59 @@ export const ghlMessageType = (channel: string): "IG" | "FB" | null => {
   return null;
 };
 
+/** Instagram / Messenger cap a DM at ~1000 characters — long replies (e.g. two menus) go out as several messages. */
+const MAX_DM = 950;
+export const splitForDm = (text: string, max = MAX_DM): string[] => {
+  const t = text.trim();
+  if (t.length <= max) return [t];
+  // Lines (very long lines broken at word boundaries), then packed into messages — never split mid-line or mid-word
+  const lines = t.split("\n").flatMap((line) => {
+    if (line.length <= max) return [line];
+    const out: string[] = [];
+    let cur = "";
+    for (const word of line.split(" ")) {
+      if (cur && (cur + " " + word).length > max) {
+        out.push(cur);
+        cur = word;
+      } else cur = cur ? `${cur} ${word}` : word;
+    }
+    if (cur) out.push(cur);
+    return out;
+  });
+  const parts: string[] = [];
+  let cur = "";
+  for (const line of lines) {
+    const next = cur ? `${cur}\n${line}` : line;
+    if (next.length > max && cur.trim()) {
+      parts.push(cur.trim());
+      cur = line;
+    } else cur = next;
+  }
+  if (cur.trim()) parts.push(cur.trim());
+  return parts;
+};
+
 export const sendSocialReply = async (contactId: string, channel: string, message: string): Promise<boolean> => {
   const type = ghlMessageType(channel);
   if (!hasGhlApi() || !type) {
     console.log(`[AI] ❌ Not sent via GHL API — ${!hasGhlApi() ? "GHL_API_TOKEN missing" : `unknown channel "${channel}"`}`);
     return false;
   }
-  const body = { type, contactId, message };
-  console.log("\n[AI] ➡️  SENDING reply via GHL API (POST /conversations/messages):");
-  console.log(JSON.stringify(body, null, 2));
-  try {
-    const text = await ghlFetch("/conversations/messages", body);
-    console.log("[AI] ⬅️  GHL API RESPONSE: OK", text.slice(0, 500));
-    return true;
-  } catch (err: any) {
-    console.log("[AI] ❌ GHL API RESPONSE: FAILED", err?.message);
-    logger.error("[AI] GHL send reply failed", { contactId, channel, error: err?.message });
-    return false;
+  const chunks = splitForDm(message);
+  for (const [i, chunk] of chunks.entries()) {
+    const body = { type, contactId, message: chunk };
+    console.log(`\n[AI] ➡️  SENDING reply${chunks.length > 1 ? ` (part ${i + 1}/${chunks.length})` : ""} via GHL API (POST /conversations/messages):`);
+    console.log(JSON.stringify(body, null, 2));
+    try {
+      const text = await ghlFetch("/conversations/messages", body);
+      console.log("[AI] ⬅️  GHL API RESPONSE: OK", text.slice(0, 500));
+    } catch (err: any) {
+      console.log("[AI] ❌ GHL API RESPONSE: FAILED", err?.message);
+      logger.error("[AI] GHL send reply failed", { contactId, channel, part: i + 1, error: err?.message });
+      return false;
+    }
   }
+  return true;
 };
 
 /**
@@ -79,7 +114,16 @@ export const sendReplyToWebhook = async (p: {
   paymentStatus?: string;
   /** Plain-text summary for staff: event details, quote, booking ID, payment, callback. */
   notes?: string;
-}) => {
+}): Promise<boolean> => {
+  // Long replies → one webhook call per DM-sized part (the GHL workflow sends each as its own message)
+  const chunks = splitForDm(p.reply);
+  if (chunks.length > 1) {
+    for (const [i, chunk] of chunks.entries()) {
+      const ok = await sendReplyToWebhook({ ...p, reply: chunk, ...(i > 0 ? { handoff: false } : {}) });
+      if (!ok) return false;
+    }
+    return true;
+  }
   const type = ghlMessageType(p.channel);
   const payload = {
     bookingId: p.bookingId || "",

@@ -34,6 +34,12 @@ export interface IAiInquiry {
   photographerHours?: number;
   intent?: "reservation" | "walkthrough" | "both";
   leadType?: "hot" | "warm" | "future";
+  /** Partner catering chosen in the chat: restaurant ids ("jamaican_jerk_house,cooklyn_eats") + dish names. */
+  cateringMenu?: string;
+  dishes?: string[];
+  /** Catering request per dish: people to serve + optional portion style */
+  cateringItems?: { name: string; people: number; portion: string }[];
+  cateringNotes?: string;
 }
 
 /** The chat booking (website checkout link) the AI prepared — held 30 min. */
@@ -169,7 +175,11 @@ const aiConversationSchema = new Schema<IAiConversation>(
       photographer: Boolean,
       photographerHours: Number,
       intent: { type: String, enum: ["reservation", "walkthrough", "both"] },
-      leadType: { type: String, enum: ["hot", "warm", "future"] }
+      leadType: { type: String, enum: ["hot", "warm", "future"] },
+      cateringMenu: String,
+      dishes: [String],
+      cateringItems: [{ _id: false, name: String, people: Number, portion: String }],
+      cateringNotes: String
     },
     lastCheck: {
       kind: { type: String, enum: ["venue", "table"] },

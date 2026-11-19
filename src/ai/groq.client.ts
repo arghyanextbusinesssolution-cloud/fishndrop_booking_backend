@@ -54,7 +54,7 @@ export const getGroqModel = () => getGroqModels()[0];
  */
 const cooldownUntil = new Map<string, number>();
 const coolDown = (p: Provider, err: string) => {
-  const mins = /no longer available|not found|not supported|404/i.test(err)
+  const mins = /no longer available|not found|not supported|404|too large|413/i.test(err)
     ? 24 * 60
     : /per day|TPD|RPD|quota/i.test(err)
       ? 30

@@ -80,7 +80,12 @@ export interface IBooking extends Document {
   foodPaymentMethod?: "card" | "zelle";
   foodZelleProofUrl?: string;
   foodPaidAt?: Date;
-  dishQuantities?: Record<string, number>; // { "Dish Name": plattersCount }
+  /** { "Dish Name": number } — PEOPLE to serve when cateringFormat === "servings", platters on older bookings */
+  dishQuantities?: Record<string, number>;
+  /** { "Dish Name": "individual" | "half_tray" | "full_tray" } — optional portion request (not guaranteed) */
+  dishPortions?: Record<string, string>;
+  /** "servings" = catering request in people-per-dish (Nov 2026+). Missing = older "platters" booking. */
+  cateringFormat?: "servings";
   quoteHistory?: Array<{
     action: "inquiry_created" | "quote_sent" | "quote_accepted" | "quote_rejected" | "menu_updated";
     actor: "admin" | "user";
@@ -240,6 +245,8 @@ const bookingSchema = new Schema<IBooking>(
       of: Number,
       default: {}
     },
+    dishPortions: { type: Map, of: String, default: {} },
+    cateringFormat: { type: String, enum: ["servings"] },
     offerPrice: { type: Number },
     negotiationNotes: { type: String, trim: true, maxlength: 3000 },
     offerStatus: { type: String, enum: ["pending", "offered", "accepted", "declined"], default: "pending" },

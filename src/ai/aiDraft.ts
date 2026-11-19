@@ -58,6 +58,12 @@ export interface DraftInput {
   notes?: string;
   contactId?: string;
   channel?: string;
+  /** Partner catering chosen in the chat: "jamaican_jerk_house,cooklyn_eats" + dish names (price set later by the team). */
+  catering_menu?: string;
+  catering_dishes?: string[];
+  /** People per dish + optional portion style */
+  catering_items?: { name: string; people: number; portion: string }[];
+  catering_notes?: string;
 }
 
 const bool = (v: unknown) => v === true || v === "true" || v === "yes" || v === 1 || v === "1";
@@ -119,7 +125,21 @@ const normalize = async (a: DraftInput, requireContact: boolean) => {
       fullName,
       phone,
       email,
-      notes: (a.notes || "").trim().slice(0, 1000) || undefined
+      notes: (a.notes || "").trim().slice(0, 1000) || undefined,
+      cateringMenu: /^[a-z_,]+$/.test(a.catering_menu || "") ? a.catering_menu : undefined,
+      selectedDishes: (Array.isArray(a.catering_dishes) ? a.catering_dishes : []).map((d) => String(d).slice(0, 120)).slice(0, 40),
+      // Mongo map keys can't contain "." or "$"
+      dishPeople: Object.fromEntries(
+        (a.catering_items || [])
+          .filter((it) => it?.name && Number(it.people) > 0)
+          .map((it) => [String(it.name).replace(/[.$]/g, "").slice(0, 120), Math.min(500, Math.round(Number(it.people)))])
+      ),
+      dishPortions: Object.fromEntries(
+        (a.catering_items || [])
+          .filter((it) => it?.name && ["individual", "half_tray", "full_tray"].includes(it.portion))
+          .map((it) => [String(it.name).replace(/[.$]/g, "").slice(0, 120), it.portion])
+      ),
+      cateringNotes: (a.catering_notes || "").trim().slice(0, 500) || undefined
     }
   };
 };
@@ -222,6 +242,11 @@ export const createDraft = async (a: DraftInput) => {
         needDj: v.needDj,
         needPhotographer: v.needPhotographer,
         photographerHours: v.photographerHours,
+        cateringMenu: v.cateringMenu,
+        selectedDishes: v.selectedDishes,
+        dishPeople: v.dishPeople,
+        dishPortions: v.dishPortions,
+        cateringNotes: v.cateringNotes,
         fullName: v.fullName,
         phone: v.phone,
         email: v.email,
@@ -286,6 +311,11 @@ export const getPublicDraft = async (code: string) => {
     needDj: draft.needDj,
     needPhotographer: draft.needPhotographer,
     photographerHours: draft.photographerHours,
+    cateringMenu: draft.cateringMenu || "",
+    selectedDishes: draft.selectedDishes || [],
+    dishPeople: draft.dishPeople || {},
+    dishPortions: draft.dishPortions || {},
+    cateringNotes: draft.cateringNotes || "",
     fullName: draft.fullName,
     phone: draft.phone,
     email: draft.email,

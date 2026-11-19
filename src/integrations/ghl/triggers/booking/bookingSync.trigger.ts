@@ -77,7 +77,7 @@ export const buildAiBookingSummary = (b: any): string => {
     const addOns: string[] = [];
     addOns.push(b.needDj ? "DJ included" : "no DJ");
     addOns.push(b.needPhotographer ? `photographer for ${b.photographerHours || 2} hours` : "no photographer");
-    const notes = parseBookingNotes(b.notes, b.dishQuantities);
+    const notes = parseBookingNotes(b.notes, b.dishQuantities, { dishPortions: (b as any).dishPortions, cateringFormat: (b as any).cateringFormat });
     const hasCatering = b.cateringMenu && !["none", "no_catering"].includes(b.cateringMenu);
     addOns.push(
       hasCatering

@@ -94,7 +94,7 @@ export const calculateBookingFinancials = (b: IBooking) => {
           amountOwed: foodCost,
           amountPaid: b.foodPaymentStatus === "paid" ? foodCost : 0,
           paymentStatus: b.foodPaymentStatus === "paid" ? "paid" : "unpaid",
-          notes: "Event Catering & Platters"
+          notes: "Event Catering"
         });
       }
     }
