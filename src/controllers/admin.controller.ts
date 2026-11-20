@@ -684,8 +684,26 @@ export const updateBookingOfferPrice = async (req: Request, res: Response, next:
       const nameParts = (booking.customerName || "").trim().split(/\s+/);
       const firstName = nameParts[0] || "";
       const lastName = nameParts.slice(1).join(" ") || "";
-      const dishesSummary = dishesWithQty.map((d: any) => `${d.name} (x${d.quantity})`).join(", ");
-      const totalDishCount = dishesWithQty.reduce((sum: number, d: any) => sum + (Number(d.quantity) || 1), 0);
+      // New catering requests: quantity = PEOPLE to serve (+ optional portion style); older bookings = platters
+      const servingsFormat =
+        (booking as any).cateringFormat === "servings" || /\(for \d+ (?:people|person)/i.test(String(booking.notes || ""));
+      const portionMap: Record<string, string> = (() => {
+        const p = (booking as any).dishPortions;
+        if (!p) return {};
+        return typeof p.entries === "function" ? Object.fromEntries(p.entries()) : { ...p };
+      })();
+      const PORTION_LABELS: Record<string, string> = { individual: "Individual servings", half_tray: "Half tray", full_tray: "Full tray" };
+      const dishesSummary = dishesWithQty
+        .map((d: any) =>
+          servingsFormat
+            ? `${d.name} (for ${d.quantity} ${Number(d.quantity) === 1 ? "person" : "people"}${PORTION_LABELS[portionMap[d.name]] ? ` · ${PORTION_LABELS[portionMap[d.name]]}` : ""})`
+            : `${d.name} (x${d.quantity})`
+        )
+        .join(", ");
+      // Servings requests: number of dishes; older bookings: total platters
+      const totalDishCount = servingsFormat
+        ? dishesWithQty.length
+        : dishesWithQty.reduce((sum: number, d: any) => sum + (Number(d.quantity) || 1), 0);
       const dateStr = booking.bookingDate
         ? (booking.bookingDate instanceof Date
             ? booking.bookingDate.toISOString().split("T")[0]

@@ -1192,7 +1192,8 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
           if (obj[k]) {
             const res = findBookingIdInObject(obj[k]);
             if (res) return res;
-            if (typeof obj[k] === "string" && obj[k].trim().length >= 4) return obj[k].trim();
+            // Only a value that LOOKS like an id — never a whole bank email body
+            if (typeof obj[k] === "string" && /^#?[a-f0-9]{4,24}$/i.test(obj[k].trim())) return obj[k].trim();
           }
         }
         for (const val of Object.values(obj)) {
@@ -1310,18 +1311,95 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
       }).sort({ createdAt: -1 }).populate("tables");
     }
 
+    // 4. Bank alert with no booking ID in the memo ("Denise Frazier sent you $200.00"):
+    //    match an UNVERIFIED Zelle booking by the sender's name + the amount it's waiting for.
+    let bankMatchNote = "";
     if (!booking) {
-      logger.warn(`[GHL Zelle Webhook] Booking not found. Searched Booking ID: '${rawBookingId}', Email: '${customerEmail}'`);
+      const alertText = extractString(body.message || body.body || body.notes || body.text || "");
+      const sent = alertText.match(/([A-Z][A-Za-z'’.-]*(?:\s+[A-Z][A-Za-z'’.-]*){1,4})\s+sent\s+you\s+\$\s?([0-9][0-9,]*(?:\.[0-9]{1,2})?)/);
+      if (sent) {
+        const senderName = sent[1].trim();
+        const alertAmount = Number(sent[2].replace(/,/g, ""));
+        if (!rawAmount) rawAmount = alertAmount;
+        // "Zelle. JOHN A SMITH" → ["zelle", "john", "smith"] (initials dropped; stray words don't block a match)
+        const nameTokens = senderName
+          .toLowerCase()
+          .split(/\s+/)
+          .map((t) => t.replace(/[^a-z'’-]/g, ""))
+          .filter((t) => t.length > 1);
+        const candidates = await Booking.find({
+          paymentMethod: "zelle",
+          status: { $in: ["pending", "confirmed"] },
+          createdAt: { $gt: new Date(Date.now() - 120 * 24 * 3600 * 1000) },
+          $or: [
+            { zelleVerificationStatus: { $in: ["pending_ghl_verification", "manual_review", "mismatched", "none"] }, paymentStatus: "pending_payment" },
+            { paymentStatus: "deposit_paid", remainingAmount: { $gt: 0 } }
+          ]
+        })
+          .sort({ createdAt: -1 })
+          .limit(200)
+          .populate("tables");
+        // Surname (last word) + at least one other name word must appear in the booking's customer name
+        const byName = candidates.filter((b: any) => {
+          const words = String(b.customerName || "").toLowerCase().split(/\s+/);
+          const has = (t: string) => words.includes(t);
+          const surname = nameTokens[nameTokens.length - 1];
+          return nameTokens.length >= 2 && has(surname) && nameTokens.slice(0, -1).some(has);
+        });
+        const awaiting = (b: any) => (b.paymentStatus === "deposit_paid" ? Number(b.remainingAmount || 0) : Number(b.depositAmount || b.totalAmount || 0));
+        const exact = byName.filter((b: any) => Math.abs(awaiting(b) - alertAmount) < 0.01);
+
+        if (exact.length === 1) {
+          booking = exact[0];
+          logger.info(`[GHL Zelle Webhook] No booking ID in memo — matched ${booking._id} by sender "${senderName}" + $${alertAmount}`);
+        } else if (byName.length === 1) {
+          // Right person, unexpected amount → never auto-confirm; flag for staff
+          const b: any = byName[0];
+          b.zelleVerificationStatus = "manual_review";
+          b.zelleNotes = `Bank alert: ${senderName} sent $${alertAmount.toFixed(2)} with no booking ID in the memo; this booking expects $${awaiting(b).toFixed(2)}. Check and verify manually.`;
+          await b.save();
+          bankMatchNote = `Name matched booking #${String(b._id).slice(-6).toUpperCase()} but the amount ($${alertAmount}) doesn't match what it expects ($${awaiting(b)}) — flagged for manual review in the admin panel.`;
+        } else {
+          bankMatchNote = byName.length
+            ? `${byName.length} unverified Zelle bookings are under "${senderName}" — verify the right one manually in the admin panel.`
+            : `No unverified Zelle booking found for sender "${senderName}" ($${alertAmount}). The memo had no booking ID — verify manually in the admin panel.`;
+        }
+      }
+    }
+
+    if (!booking) {
+      const shownId = rawBookingId && /^#?[a-f0-9]{4,24}$/i.test(String(rawBookingId).trim()) ? String(rawBookingId) : "none in memo";
+      logger.warn(`[GHL Zelle Webhook] Booking not found. ID: '${shownId}', Email: '${customerEmail}'. ${bankMatchNote}`);
       res.status(404).json({
         success: false,
-        message: `Booking not found (Searched ID: '${rawBookingId || "none"}', Email: '${customerEmail || "none"}')`,
-        tip: "Ensure the booking ID (e.g. 24-char ObjectId or #shortcode) is included in the webhook payload, memo, notes, or customData."
+        message: bankMatchNote || `Booking not found (booking ID: ${shownId}, email: ${customerEmail || "none"})`,
+        tip: "Ask the customer to put their booking ID (e.g. #6AC63F) in the Zelle memo, or verify the payment manually in the admin panel."
       });
       return;
     }
 
-    const isBalancePayment = paymentType === "balance" || (booking.paymentStatus === "deposit_paid" && booking.remainingAmount > 0);
     const receivedAmount = Number(rawAmount || 0);
+
+    // What is this Zelle payment FOR? (GHL can say so with paymentType; otherwise infer it from the booking)
+    //   deposit → booking not paid yet · balance → balance still due · food → an unpaid catering quote
+    //   extra   → booking already paid (add-on / extra hours / anything else) — ADDED, never overwrites the deposit
+    const typeHint = String(paymentType || "").toLowerCase();
+    const depositAlreadyVerified =
+      booking.paymentStatus === "deposit_paid" ||
+      booking.paymentStatus === "paid" ||
+      Boolean(booking.paymentBreakdown?.some((p: any) => p.paymentType === "deposit" && p.status === "verified"));
+    const cateringDue =
+      Number(booking.offerPrice || 0) > 0 && booking.foodPaymentStatus !== "paid" && booking.offerStatus !== "declined";
+    const remainingDue = Number(booking.remainingAmount || 0);
+    let paymentKind: "deposit" | "balance" | "food" | "extra";
+    if (/food|cater/.test(typeHint)) paymentKind = "food";
+    else if (/add.?on|addon|extra/.test(typeHint)) paymentKind = "extra";
+    else if (!depositAlreadyVerified && typeHint !== "balance") paymentKind = "deposit";
+    else if (cateringDue && Math.abs(receivedAmount - Number(booking.offerPrice)) < 0.01 && Math.abs(receivedAmount - remainingDue) >= 0.01)
+      paymentKind = "food";
+    else if (remainingDue > 0) paymentKind = "balance";
+    else paymentKind = "extra";
+    const isBalancePayment = paymentKind === "balance";
 
     // The amount the booking expects: remaining balance for balance payments, deposit otherwise
     const expectedAmount = isBalancePayment
@@ -1332,6 +1410,62 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
     // When GHL fires this webhook, it means GHL verified the payment — trust it regardless of amount.
     // The receivedAmount will be saved as the actual payment so the booking shows real amount.
     const isStatusValid = ghlStatus !== "failed" && ghlStatus !== "mismatched" && ghlStatus !== "rejected";
+
+    // ── Catering payment or extra/add-on payment on a booking that's already paid ──────────────────
+    if (isStatusValid && (paymentKind === "food" || paymentKind === "extra")) {
+      if (receivedAmount <= 0) {
+        res.status(400).json({ success: false, message: "Zelle amount missing — can't record an extra payment without it." });
+        return;
+      }
+      booking.paymentBreakdown = booking.paymentBreakdown || [];
+      const duplicate = booking.paymentBreakdown.some((p: any) => p.transactionId === transactionId);
+      if (!duplicate) {
+        if (paymentKind === "food") {
+          booking.foodPaymentStatus = "paid";
+          booking.foodPaymentMethod = "zelle";
+          booking.foodPaidAt = new Date();
+          booking.paymentBreakdown.push({
+            amount: receivedAmount,
+            paymentMethod: "zelle",
+            paymentType: "food_catering",
+            status: "verified",
+            transactionId,
+            notes: `Zelle payment of $${receivedAmount.toFixed(2)} for the catering quote`,
+            paidAt: new Date()
+          });
+          booking.zelleNotes = `Catering paid by Zelle: $${receivedAmount.toFixed(2)}`;
+        } else {
+          // Add-on / extra money: increase the booking total (so it isn't lost) and tell staff to confirm what it covers
+          booking.totalAmount = Math.round((Number(booking.totalAmount || 0) + receivedAmount) * 100) / 100;
+          if (typeof (booking as any).finalAmount === "number") (booking as any).finalAmount = Math.round(((booking as any).finalAmount + receivedAmount) * 100) / 100;
+          booking.paymentBreakdown.push({
+            amount: receivedAmount,
+            paymentMethod: "zelle",
+            paymentType: "manual",
+            status: "verified",
+            transactionId,
+            iterationIndex: booking.paymentBreakdown.length + 1,
+            notes: `Extra Zelle payment of $${receivedAmount.toFixed(2)} (add-on) — confirm which add-on it covers${notes ? `. Memo: ${notes.slice(0, 120)}` : ""}`,
+            paidAt: new Date()
+          });
+          booking.zelleNotes = `EXTRA PAYMENT: $${receivedAmount.toFixed(2)} received by Zelle on an already-paid booking — added to the total (now $${booking.totalAmount.toFixed(2)}). Confirm which add-on it covers.`;
+        }
+        booking.zelleTransactionId = transactionId;
+        await booking.save();
+        void sendGHLZelleConfirmedEvent(booking, { paidNow: receivedAmount });
+        logger.info(`[GHL Zelle Webhook] ${paymentKind === "food" ? "Catering" : "Extra/add-on"} payment $${receivedAmount} recorded on ${booking._id}`);
+      }
+      res.status(200).json({
+        success: true,
+        paymentKind,
+        duplicate,
+        message:
+          paymentKind === "food"
+            ? `Catering payment of $${receivedAmount.toFixed(2)} recorded — food marked paid.`
+            : `Extra payment of $${receivedAmount.toFixed(2)} added to the booking (total now $${Number(booking.totalAmount).toFixed(2)}). Staff should confirm which add-on it covers.`
+      });
+      return;
+    }
 
     // GHL verified AFTER the 15-minute window released this booking: only re-confirm if the slot is still free
     if (isStatusValid && !isBalancePayment && booking.status === "cancelled") {
