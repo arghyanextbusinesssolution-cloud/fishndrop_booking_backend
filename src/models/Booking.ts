@@ -62,6 +62,10 @@ export interface IBooking extends Document {
     iterationIndex?: number;
     notes?: string;
     paidAt: Date;
+    /** "zelle_webhook" · "admin" · "stripe" · "customer_upload" */
+    verifiedBy?: string;
+    verifiedByName?: string;
+    verifiedAt?: Date;
   }>;
 
   // Zelle Payment & GHL Verification Fields
@@ -308,7 +312,12 @@ const bookingSchema = new Schema<IBooking>(
         proofUrl: { type: String, default: "" },
         iterationIndex: { type: Number, default: 1 },
         notes: { type: String, default: "" },
-        paidAt: { type: Date, default: Date.now }
+        paidAt: { type: Date, default: Date.now },
+        /** How it was verified: "zelle_webhook" (GHL bank alert) · "admin" · "stripe" · "customer_upload" (screenshot, awaiting check) */
+        verifiedBy: { type: String },
+        /** Staff member's name when verified by an admin */
+        verifiedByName: { type: String },
+        verifiedAt: { type: Date }
       }
     ],
     paymentMethod: {

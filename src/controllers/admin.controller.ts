@@ -492,13 +492,41 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
       (proofType === "balance" ||
       (Boolean(booking.remainingZelleProofUrl) && booking.remainingPaymentStatus !== "paid"));
 
+    // Payment history: mark the customer's pending screenshot entry verified (or add the entry if there's none),
+    // recording WHO verified it — so the booking shows "Verified by <admin> on <date>".
+    const adminName = (req as any).user?.name || (req as any).user?.email || "Admin";
+    const recordAdminVerified = (types: string[], amount: number, label: string, proofUrl?: string) => {
+      booking.paymentBreakdown = booking.paymentBreakdown || [];
+      const pending = booking.paymentBreakdown.find((p: any) => types.includes(p.paymentType) && p.status === "pending");
+      if (pending) {
+        (pending as any).status = "verified";
+        (pending as any).verifiedBy = "admin";
+        (pending as any).verifiedByName = adminName;
+        (pending as any).verifiedAt = new Date();
+      } else if (!booking.paymentBreakdown.some((p: any) => types.includes(p.paymentType) && p.status === "verified") && amount > 0) {
+        booking.paymentBreakdown.push({
+          amount,
+          paymentMethod: "zelle",
+          paymentType: types[0] as any,
+          status: "verified",
+          transactionId: `ADMIN-ZEL-${Date.now()}`,
+          proofUrl: proofUrl || "",
+          iterationIndex: booking.paymentBreakdown.length + 1,
+          notes: `${label} Zelle payment verified manually by ${adminName}${proofUrl ? "" : " (no screenshot uploaded)"}`,
+          paidAt: new Date(),
+          verifiedBy: "admin",
+          verifiedByName: adminName,
+          verifiedAt: new Date()
+        } as any);
+      }
+      booking.markModified("paymentBreakdown");
+    };
+
     if (action === "verify") {
       if (isFoodVerification) {
         booking.foodPaymentStatus = "paid";
         booking.foodPaidAt = new Date();
-        booking.paymentBreakdown = booking.paymentBreakdown?.map(p =>
-          p.paymentType === "food_catering" ? { ...p, status: "verified" as const } : p
-        );
+        recordAdminVerified(["food_catering"], Number(booking.offerPrice || 0), "Catering", booking.foodZelleProofUrl);
         booking.quoteHistory = booking.quoteHistory || [];
         booking.quoteHistory.push({
           action: "quote_accepted",
@@ -510,6 +538,7 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
         });
         await booking.save();
       } else if (isBalanceVerification) {
+        recordAdminVerified(["balance_full", "balance_partial"], Number(booking.remainingAmount || 0), "Balance", booking.remainingZelleProofUrl);
         // Clear remaining balance!
         booking.remainingPaymentStatus = "paid";
         booking.paymentStatus = "paid";
@@ -521,6 +550,7 @@ export const verifyAdminZelleBooking = async (req: Request, res: Response, next:
 
         void sendFullPaymentConfirmationViaEmailJS(booking);
       } else {
+        recordAdminVerified(["deposit"], Number(booking.depositAmount || 0), "Deposit", booking.zelleProofUrl);
         // Clear deposit
         booking.status = "confirmed";
         booking.paymentStatus = (booking.remainingAmount === 0 || booking.bookingType === "standard") ? "paid" : "deposit_paid";
@@ -1084,6 +1114,7 @@ export const createManualBooking = async (req: Request, res: Response, next: Nex
     const paymentBreakdown: any[] = [];
     if (paidAmount > 0) {
       paymentBreakdown.push({
+        verifiedBy: "admin", verifiedByName: (req as any).user?.name || (req as any).user?.email || "Admin", verifiedAt: new Date(),
         amount: paidAmount,
         paymentMethod,
         paymentType: paidAmount >= totalAmount ? "balance_full" : "deposit",
@@ -1221,6 +1252,7 @@ export const markBookingFullyPaid = async (req: Request, res: Response, next: Ne
     if (remainingToPay > 0) {
       booking.paymentBreakdown = booking.paymentBreakdown || [];
       booking.paymentBreakdown.push({
+        verifiedBy: "admin", verifiedByName: (req as any).user?.name || (req as any).user?.email || "Admin", verifiedAt: new Date(),
         amount: remainingToPay,
         paymentMethod: paymentMethodUsed as any,
         paymentType: "balance_full",
@@ -1923,6 +1955,7 @@ export const updateBookingDetails = async (req: Request, res: Response, next: Ne
       if (diff !== 0) {
         booking.paymentBreakdown = booking.paymentBreakdown || [];
         booking.paymentBreakdown.push({
+          verifiedBy: "admin", verifiedByName: (req as any).user?.name || (req as any).user?.email || "Admin", verifiedAt: new Date(),
           amount: diff,
           paymentMethod: (booking.paymentMethod || "other") as any,
           paymentType: "manual",

@@ -1425,6 +1425,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
           booking.foodPaymentMethod = "zelle";
           booking.foodPaidAt = new Date();
           booking.paymentBreakdown.push({
+            verifiedBy: "zelle_webhook", verifiedAt: new Date(),
             amount: receivedAmount,
             paymentMethod: "zelle",
             paymentType: "food_catering",
@@ -1439,6 +1440,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
           booking.totalAmount = Math.round((Number(booking.totalAmount || 0) + receivedAmount) * 100) / 100;
           if (typeof (booking as any).finalAmount === "number") (booking as any).finalAmount = Math.round(((booking as any).finalAmount + receivedAmount) * 100) / 100;
           booking.paymentBreakdown.push({
+            verifiedBy: "zelle_webhook", verifiedAt: new Date(),
             amount: receivedAmount,
             paymentMethod: "zelle",
             paymentType: "manual",
@@ -1527,6 +1529,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
 
         booking.paymentBreakdown = booking.paymentBreakdown || [];
         booking.paymentBreakdown.push({
+          verifiedBy: "zelle_webhook", verifiedAt: new Date(),
           amount: paidAmount,
           paymentMethod: "zelle",
           paymentType: isFullyPaid ? "balance_full" : "balance_partial",
@@ -1574,6 +1577,7 @@ export const handleGHLZelleWebhook = async (req: Request, res: Response, next: N
 
         if (!alreadyHasVerifiedDeposit) {
           booking.paymentBreakdown.push({
+            verifiedBy: "zelle_webhook", verifiedAt: new Date(),
             amount: receivedAmount || booking.depositAmount,
             paymentMethod: "zelle",
             paymentType: "deposit",
