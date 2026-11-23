@@ -5,6 +5,7 @@ import {
   MAX_DURATION,
   MIN_DURATION,
   MIN_VENUE_GUESTS,
+  SEATED_CAPACITY,
   INCLUDED_HOURS,
   Pricing,
   siteLinks
@@ -124,11 +125,11 @@ export const checkVenueAvailability = async (args: {
   const guestNote = !guests
     ? undefined
     : tooBig
-      ? `Over Tropica's capacity (30 seated / ${pricing.maxGuestCapacity} standing) — follow the Large Events process (partner venues + team follow-up). Do not book.`
+      ? `Over Tropica's capacity (${SEATED_CAPACITY} seated / ${pricing.maxGuestCapacity} standing) — follow the Large Events process (partner venues + team follow-up). Do not book.`
       : guests < MIN_VENUE_GUESTS
         ? `Billed at the ${MIN_VENUE_GUESTS}-guest minimum ($${MIN_VENUE_GUESTS * pricing.perGuestPrice} for 5 hours).`
-        : guests > 30
-          ? "31-40 guests only works standing — confirm the event will be standing."
+        : guests > SEATED_CAPACITY
+          ? `${SEATED_CAPACITY + 1}-${pricing.maxGuestCapacity} guests only works standing — confirm the event will be standing.`
           : undefined;
 
   const open = await openVenueStarts(date, dur.hours);

@@ -35,12 +35,15 @@ import { getAdminBookingOverview, getAdminCelebrations } from "../controllers/gu
 import { getDataCenter, exportDataCenter } from "../controllers/dataCenter.controller";
 import { updateBookingMenu, rescheduleBooking } from "../controllers/booking";
 import adminOnly, { staffOrAdminOnly } from "../middleware/admin.middleware";
+import { listAuditLogs } from "../controllers/audit.controller";
 import authMiddleware from "../middleware/auth.middleware";
 import couponRoutes from "./coupon.routes";
 
 const router = express.Router();
 
 router.use(authMiddleware, staffOrAdminOnly);
+// Audit log: every staff / webhook create · change · delete with before → after (admins only)
+router.get("/audit-logs", adminOnly, listAuditLogs);
 router.post("/seed-tables", adminOnly, seedTables);
 router.get("/tables", getAllTables);
 router.patch("/tables/config", adminOnly, updateTableCounts);

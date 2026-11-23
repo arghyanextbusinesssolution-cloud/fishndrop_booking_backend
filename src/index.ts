@@ -1,4 +1,7 @@
 import "./config/loadEnv";
+// Must load before any model: records before/after of staff changes for the audit log
+import "./audit/register";
+import auditMiddleware from "./audit/middleware";
 import compression from "compression";
 import cors, { CorsOptions } from "cors";
 import express from "express";
@@ -103,6 +106,9 @@ app.use((req, res, next) => {
   logger.info(`[REQUEST] ${req.method} ${req.url}`);
   next();
 });
+
+// Audit trail: who created / changed / deleted what (staff + webhooks) → Admin → Audit Log
+app.use(auditMiddleware);
 
 // AI booking assistant (GHL DMs) — own rate limit + body parser, so it sits before the global limiter
 app.use("/api/ai", aiRoutes);

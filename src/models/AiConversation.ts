@@ -83,6 +83,12 @@ export interface IAiConversation extends Document {
   contactName?: string;
   contactEmail?: string;
   contactPhone?: string;
+  /** Customer refused to share a phone number — the AI stops asking */
+  phoneDeclined?: boolean;
+  /** Customer typed their full name in this chat (the Instagram profile name doesn't count) */
+  nameConfirmed?: boolean;
+  /** Customer already said YES to reserving — only waiting for their name */
+  pendingReserve?: boolean;
   hold?: IAiHold;
   draft?: IAiDraftRef;
   /** Walkthrough the AI sent to GHL (event "walkthrough_booking"). */
@@ -128,6 +134,9 @@ const aiConversationSchema = new Schema<IAiConversation>(
     contactName: { type: String, trim: true },
     contactEmail: { type: String, trim: true, lowercase: true },
     contactPhone: { type: String, trim: true },
+    phoneDeclined: Boolean,
+    nameConfirmed: Boolean,
+    pendingReserve: Boolean,
     hold: {
       bookingId: String,
       ref: String,

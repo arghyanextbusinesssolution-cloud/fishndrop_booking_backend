@@ -22,7 +22,8 @@ import { getPricing, MAX_DURATION, MIN_DURATION, siteLinks } from "./knowledge";
 
 export const DRAFT_HOLD_MINUTES = 30;
 export const DRAFT_TTL_MINUTES = 60;
-const SEATED_CAPACITY = 30;
+// 25 seated / 30 standing (standing max comes from settings, capped at 30)
+const SEATED_CAPACITY = 25;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L
 
@@ -91,7 +92,7 @@ const normalize = async (a: DraftInput, requireContact: boolean) => {
   const seating = a.seating === "standing" || a.seating === "seated" ? a.seating : undefined;
   if (guests > SEATED_CAPACITY && guests <= pricing.maxGuestCapacity && seating !== "standing") {
     if (seating === "seated") problems.push(`Seated events fit up to ${SEATED_CAPACITY} guests.`);
-    else missing.push("seated or standing (31-40 guests must be standing)");
+    else missing.push(`seated or standing (${SEATED_CAPACITY + 1}-${pricing.maxGuestCapacity} guests must be standing)`);
   }
 
   const fullName = (a.full_name || "").trim().replace(/\s+/g, " ").slice(0, 80) || undefined;

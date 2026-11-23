@@ -16,7 +16,7 @@ export interface ISystemSettings extends Document {
 
   // Private Venue Booking Per-Guest Pricing
   perGuestPrice: number; // Default: $50 per guest
-  maxGuestCapacity: number; // Default: 40 guests
+  maxGuestCapacity: number; // Default: 30 guests (25 seated / 30 standing)
 
   // Venue Add-on Rates
   djPrice: number; // Default: $300
@@ -55,7 +55,7 @@ const systemSettingsSchema = new Schema<ISystemSettings>(
     feeMode: { type: String, enum: ["customer_paid", "promoter_paid"], default: "customer_paid" },
 
     perGuestPrice: { type: Number, default: 50, min: 1 },
-    maxGuestCapacity: { type: Number, default: 40, min: 1 },
+    maxGuestCapacity: { type: Number, default: 30, min: 1 },
 
     djPrice: { type: Number, default: 300, min: 0 },
     photographerBasePrice: { type: Number, default: 300, min: 0 },
@@ -81,7 +81,7 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
       platformFixedFee: 0.0,
       feeMode: "customer_paid",
       perGuestPrice: 50,
-      maxGuestCapacity: 40,
+      maxGuestCapacity: 30,
       djPrice: 300,
       photographerBasePrice: 300,
       photographerExtraHourPrice: 150,
