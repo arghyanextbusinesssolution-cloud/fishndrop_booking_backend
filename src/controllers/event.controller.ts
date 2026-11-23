@@ -302,10 +302,19 @@ export const getPromoterDashboardStats = async (req: Request, res: Response, nex
  */
 export const getPublicEvents = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const events = await Event.find({
+    const filter = {
       status: "published",
       date: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }
-    })
+    };
+
+    // ?fields=sitemap → only what /sitemap.xml needs (a few KB instead of the full event payload)
+    if (req.query.fields === "sitemap") {
+      const slim = await Event.find(filter).select("slug updatedAt").sort({ date: 1 }).lean();
+      res.status(200).json({ success: true, count: slim.length, events: slim.map((e) => ({ slug: e.slug, updatedAt: e.updatedAt })) });
+      return;
+    }
+
+    const events = await Event.find(filter)
       .populate("promoter", "name companyName")
       .sort({ date: 1 });
 
