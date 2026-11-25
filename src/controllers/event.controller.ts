@@ -791,3 +791,51 @@ export const getPromoterBookings = async (req: Request, res: Response, next: Nex
     next(new Error(`Failed to fetch promoter bookings: ${error.message}`));
   }
 };
+
+/**
+ * DELETE /api/events/:id
+ * Admin/owner permanently deletes an event (any status, including published).
+ * Refused while the event still has paid ticket orders — those guests hold valid tickets
+ * and the money must be refunded first. Unpaid/failed/cancelled orders and their tickets
+ * are removed with the event; refunded orders are kept as financial history.
+ * The Event model's delete hooks remove the Google Calendar entry.
+ */
+export const adminDeleteEvent = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const id = String(req.params.id);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      res.status(400).json({ success: false, message: "Invalid event id" });
+      return;
+    }
+
+    const event = await Event.findById(id);
+    if (!event) {
+      res.status(404).json({ success: false, message: "Event not found" });
+      return;
+    }
+
+    const paidOrders = await TicketOrder.countDocuments({ event: event._id, status: "paid" });
+    if (paidOrders > 0) {
+      res.status(409).json({
+        success: false,
+        message: `This event has ${paidOrders} paid ticket order${paidOrders === 1 ? "" : "s"}. Refund ${
+          paidOrders === 1 ? "it" : "them"
+        } first, or use Reject to take the event offline.`
+      });
+      return;
+    }
+
+    const unpaidOrderIds = await TicketOrder.find({
+      event: event._id,
+      status: { $in: ["pending", "failed", "cancelled"] }
+    }).distinct("_id");
+    await Ticket.deleteMany({ event: event._id, status: { $ne: "refunded" } });
+    if (unpaidOrderIds.length) await TicketOrder.deleteMany({ _id: { $in: unpaidOrderIds } });
+    await event.deleteOne();
+
+    logger.info(`Event deleted by ${req.user?._id}: ${event.title} (${event._id})`);
+    res.status(200).json({ success: true, message: "Event deleted" });
+  } catch (error: any) {
+    next(new Error(`Failed to delete event: ${error.message}`));
+  }
+};

@@ -7,6 +7,7 @@ import {
   getEventBySlug,
   requestEventApproval,
   adminApproveEvent,
+  adminDeleteEvent,
   getAllEventsForAdmin,
   getEventBookings,
   getPromoterBookings,
@@ -34,6 +35,7 @@ router.patch("/:id/publish-request", promoterOnly, requestEventApproval);
 // Admin & Staff review and approval routes
 router.get("/admin/all", staffOrAdminOnly, getAllEventsForAdmin);
 router.patch("/:id/admin-approve", staffOrAdminOnly, adminApproveEvent);
+router.delete("/:id", adminOnly, adminDeleteEvent);
 
 // Ticket bookings ledger: admin/staff (any event) or owning promoter (checked in controller)
 router.get("/:id/bookings", getEventBookings);
