@@ -1,13 +1,20 @@
 /** Date of birth is stored as a plain calendar date "YYYY-MM-DD" (no timezone). */
 export const DOB_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
-/** A real calendar date for someone aged 13–110. */
+/**
+ * Placeholder year meaning "year not given": the website only asks for the birthday month + day.
+ * 1904 is a leap year so Feb 29 is valid. Mirrors frontend/components/shared/BirthdayPicker.tsx.
+ */
+export const DOB_NO_YEAR = 1904;
+
+/** A real calendar date for someone aged 13–110, or a month + day with the "no year" placeholder. */
 export const isValidDob = (v: string): boolean => {
   const m = DOB_RE.exec(v || "");
   if (!m) return false;
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
   const date = new Date(Date.UTC(y, mo - 1, d));
   if (date.getUTCFullYear() !== y || date.getUTCMonth() !== mo - 1 || date.getUTCDate() !== d) return false;
+  if (y === DOB_NO_YEAR) return true;
   const age = (Date.now() - date.getTime()) / (365.25 * 24 * 3600 * 1000);
   return age >= 13 && age <= 110;
 };
@@ -31,7 +38,8 @@ export const birthdayFields = (dob: unknown, eventDate: unknown) => {
     .map((yr) => Date.UTC(yr, mo - 1, d))
     .reduce((a, b) => (Math.abs(b - evDay) < Math.abs(a - evDay) ? b : a));
   const daysFrom = Math.round((nearest - evDay) / 86400000);
-  const ageAtEvent = evY - y - (evDay < Date.UTC(evY, mo - 1, d) ? 1 : 0);
+  // No age when only the month + day were given
+  const ageAtEvent = y === DOB_NO_YEAR ? "" : evY - y - (evDay < Date.UTC(evY, mo - 1, d) ? 1 : 0);
   return {
     dateOfBirth: m[0],
     birthMonth: MONTHS[mo - 1],

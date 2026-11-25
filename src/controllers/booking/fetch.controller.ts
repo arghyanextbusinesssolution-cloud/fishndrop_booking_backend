@@ -141,7 +141,7 @@ export const getVenueCapacity = async (req: Request, res: Response, next: NextFu
       success: true,
       totalCapacity,
       maxGuestCapacity: totalCapacity,
-      perGuestPrice: settings.perGuestPrice,
+      venueBasePrice: settings.venueBasePrice,
       extraHourPrice: settings.extraHourPrice,
       djPrice: settings.djPrice,
       photographerBasePrice: settings.photographerBasePrice,

@@ -85,7 +85,7 @@ export const createAiVenueHold = async (r: HoldRequest) => {
   const duration = Math.min(MAX_DURATION, Math.max(MIN_DURATION, Math.round(Number(r.durationHours) || 5)));
   const guests = Math.round(Number(r.guests));
   const pricing = await getPricing();
-  if (guests < MIN_VENUE_GUESTS) return { ok: false, error: `Private buyouts need at least ${MIN_VENUE_GUESTS} guests.` };
+  if (!Number.isFinite(guests) || guests < MIN_VENUE_GUESTS) return { ok: false, error: "Missing or invalid: number of guests" };
   if (guests > pricing.maxGuestCapacity) return { ok: false, error: `Maximum capacity is ${pricing.maxGuestCapacity} guests.` };
 
   const stripe = getStripe();

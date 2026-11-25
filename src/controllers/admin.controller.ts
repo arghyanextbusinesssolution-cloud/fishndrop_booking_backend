@@ -50,7 +50,9 @@ import { sendPaymentEmails, sendFullPaymentConfirmationViaEmailJS } from "../uti
 import { sendGHLBookingEvent, sendGHLEmployeeCreatedEvent } from "../integrations/ghl";
 import { cleanupExpiredPendingBookings } from "../utils/cleanupExpiredBookings";
 import { sendQuoteViaGHL } from "../services/ghlQuote.service";
-import { createSlotLocksForPrivateEvent } from "../services/booking/private.service";import { formatToE164 } from "../services/ghlOtp.service";
+import { createSlotLocksForPrivateEvent } from "../services/booking/private.service";
+import { VENUE_MAX_GUESTS } from "../models/SystemSettings";
+import { formatToE164 } from "../services/ghlOtp.service";
 
 /** Inline restaurant label map so backend does not depend on frontend lib */
 const CATERING_LABEL_MAP: Record<string, string> = {
@@ -1699,7 +1701,7 @@ export const updateSystemSettings = async (req: Request, res: Response, next: Ne
       platformFeePercent: settings.platformFeePercent,
       platformFixedFee: settings.platformFixedFee,
       feeMode: settings.feeMode,
-      perGuestPrice: settings.perGuestPrice,
+      venueBasePrice: settings.venueBasePrice,
       maxGuestCapacity: settings.maxGuestCapacity,
       djPrice: settings.djPrice,
       photographerBasePrice: settings.photographerBasePrice,
@@ -1729,13 +1731,14 @@ export const updateSystemSettings = async (req: Request, res: Response, next: Ne
     if (req.body.feeMode && ["customer_paid", "promoter_paid"].includes(req.body.feeMode)) {
       updateField("feeMode", req.body.feeMode);
     }
-    if (req.body.perGuestPrice !== undefined) {
-      const num = Number(req.body.perGuestPrice);
-      updateField("perGuestPrice", num, (n) => !isNaN(n) && n >= 1);
+    if (req.body.venueBasePrice !== undefined) {
+      const num = Number(req.body.venueBasePrice);
+      updateField("venueBasePrice", num, (n) => !isNaN(n) && n >= 1);
     }
     if (req.body.maxGuestCapacity !== undefined) {
       const num = Number(req.body.maxGuestCapacity);
-      updateField("maxGuestCapacity", num, (n) => !isNaN(n) && n >= 1);
+      // 25 seated / 30 standing — the capacity can be lowered but never raised above 30
+      updateField("maxGuestCapacity", num, (n) => Number.isInteger(n) && n >= 1 && n <= VENUE_MAX_GUESTS);
     }
     if (req.body.djPrice !== undefined) {
       const num = Number(req.body.djPrice);
@@ -1861,8 +1864,8 @@ export const updateBookingDetails = async (req: Request, res: Response, next: Ne
 
     if (req.body.partySize !== undefined) {
       const partySize = Number(req.body.partySize);
-      if (!Number.isInteger(partySize) || partySize < 2 || partySize > 1000) {
-        res.status(400).json({ success: false, message: "Guests must be a whole number of at least 2" });
+      if (!Number.isInteger(partySize) || partySize < 1 || partySize > 1000) {
+        res.status(400).json({ success: false, message: "Guests must be a whole number of at least 1" });
         return;
       }
       booking.partySize = partySize;

@@ -133,7 +133,7 @@ export const buildAvailabilitySnapshot = async () => {
 
   const pricing = settings
     ? {
-        perGuestPrice: settings.perGuestPrice,
+        venueBasePrice: settings.venueBasePrice,
         maxGuestCapacity: settings.maxGuestCapacity,
         minDepositAmount: settings.minDepositAmount,
         extraHourPrice: settings.extraHourPrice,
@@ -151,7 +151,7 @@ export const buildAvailabilitySnapshot = async () => {
     lines.length ? `UNAVAILABLE — do not offer these times: ${lines.join("; ")}.` : "No dates or times are blocked in this period.",
     `Every other date and time in this period is open for booking. Bookable start times: ${startTimes.join(", ")}.`,
     pricing
-      ? `Private venue pricing: $${pricing.perGuestPrice} per guest (up to ${pricing.maxGuestCapacity} guests), minimum deposit $${pricing.minDepositAmount}, extra hour $${pricing.extraHourPrice}, DJ $${pricing.djPrice}, photographer $${pricing.photographerBasePrice} for 2 hours then $${pricing.photographerExtraHourPrice}/hour.`
+      ? `Private venue pricing: flat $${pricing.venueBasePrice} for 5 hours for the whole venue (up to ${pricing.maxGuestCapacity} guests, price does not change with guest count), minimum deposit $${pricing.minDepositAmount}, extra hour $${pricing.extraHourPrice}, DJ $${pricing.djPrice}, photographer $${pricing.photographerBasePrice} for 2 hours then $${pricing.photographerExtraHourPrice}/hour.`
       : ""
   ]
     .filter(Boolean)

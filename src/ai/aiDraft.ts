@@ -8,7 +8,7 @@ import { isPrivateSlotAvailable } from "../services/booking/private.service";
 import { buildDayRange } from "../utils/time.utils";
 import { checkVenueAvailability, priceQuote } from "./availability";
 import { endTime, isValidYmd, normalizeTime, nyToday, prettyDate, to12h } from "./dates";
-import { getPricing, MAX_DURATION, MIN_DURATION, siteLinks } from "./knowledge";
+import { getPricing, MAX_DURATION, MIN_DURATION, SEATED_CAPACITY, siteLinks } from "./knowledge";
 
 /**
  * Chat booking flow (Instagram / Facebook DM through GHL):
@@ -22,8 +22,6 @@ import { getPricing, MAX_DURATION, MIN_DURATION, siteLinks } from "./knowledge";
 
 export const DRAFT_HOLD_MINUTES = 30;
 export const DRAFT_TTL_MINUTES = 60;
-// 25 seated / 30 standing (standing max comes from settings, capped at 30)
-const SEATED_CAPACITY = 25;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
 const CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // no 0/O/1/I/L
 
@@ -88,12 +86,9 @@ const normalize = async (a: DraftInput, requireContact: boolean) => {
 
   const guests = Math.round(Number(a.guests)) || 0;
   if (!guests) missing.push("guest count");
-  if (guests > pricing.maxGuestCapacity) problems.push(`Over capacity (${SEATED_CAPACITY} seated / ${pricing.maxGuestCapacity} standing) — use the Large Events process.`);
-  const seating = a.seating === "standing" || a.seating === "seated" ? a.seating : undefined;
-  if (guests > SEATED_CAPACITY && guests <= pricing.maxGuestCapacity && seating !== "standing") {
-    if (seating === "seated") problems.push(`Seated events fit up to ${SEATED_CAPACITY} guests.`);
-    else missing.push(`seated or standing (${SEATED_CAPACITY + 1}-${pricing.maxGuestCapacity} guests must be standing)`);
-  }
+  // 25 seated; 26–30 is a standing (cocktail-style) event; more than the capacity → Large Events
+  if (guests > pricing.maxGuestCapacity) problems.push(`Over capacity (${pricing.maxGuestCapacity} guests) — use the Large Events process.`);
+  const seating = !guests ? undefined : a.seating === "standing" || guests > SEATED_CAPACITY ? "standing" : "seated";
 
   const fullName = (a.full_name || "").trim().replace(/\s+/g, " ").slice(0, 80) || undefined;
   const phone = normalizeDraftPhone(a.phone) || undefined;

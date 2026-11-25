@@ -9,7 +9,8 @@ import { getFrontendBaseUrl, normalizeBaseUrl } from "../utils/siteUrl";
  * Edit the STATIC_FACTS / FAQ below (or set AI_EXTRA_FACTS in .env) to teach the bot more.
  */
 
-export const MIN_VENUE_GUESTS = 10;
+/** No guest minimum for private bookings — the venue is one flat price. */
+export const MIN_VENUE_GUESTS = 1;
 export const INCLUDED_HOURS = 5;
 export const MIN_DURATION = 5;
 export const MAX_DURATION = 12;
@@ -23,7 +24,7 @@ export const CONTACT = {
   address: "1007 Hegeman Avenue, Brooklyn, NY 11208"
 };
 
-/** Venue capacity: 25 seated / 30 standing (standing can also be lowered with the admin "max guest capacity" setting). */
+/** Venue capacity: 25 guests seated, up to 30 standing (the admin "max guest capacity" can only lower the total). */
 export const SEATED_CAPACITY = 25;
 export const STANDING_CAPACITY = 30;
 
@@ -36,7 +37,8 @@ export const EXTERNAL_LINKS = {
 };
 
 export interface Pricing {
-  perGuestPrice: number;
+  /** Flat price for the whole venue for the first 5 hours (does not depend on guests). */
+  venueBasePrice: number;
   maxGuestCapacity: number;
   extraHourPrice: number;
   djPrice: number;
@@ -48,8 +50,8 @@ export interface Pricing {
 export const getPricing = async (): Promise<Pricing> => {
   const s: any = await (SystemSettings as any).getSettings();
   return {
-    perGuestPrice: s.perGuestPrice ?? 50,
-    // Standing max = the admin setting, never above the venue limit (30)
+    venueBasePrice: s.venueBasePrice ?? 800,
+    // The admin setting, never above the room's 30 (standing) limit
     maxGuestCapacity: Math.min(s.maxGuestCapacity ?? STANDING_CAPACITY, STANDING_CAPACITY),
     extraHourPrice: s.extraHourPrice ?? 125,
     djPrice: s.djPrice ?? 300,
@@ -74,7 +76,8 @@ export const siteLinks = () => {
 export const buildKnowledge = (p: Pricing): string => {
   const links = siteLinks();
   const extra = process.env.AI_EXTRA_FACTS?.trim();
-  const b10 = MIN_VENUE_GUESTS * p.perGuestPrice;
+  const base = p.venueBasePrice;
+  const money = (n: number) => `$${n.toLocaleString("en-US")}`;
   return `
 TROPICA VENUE — APPROVED FACTS (only state what is here or what a tool returns)
 
@@ -83,20 +86,20 @@ Business
 - Suitable for birthday parties, baby showers, bridal showers, graduations, corporate events, networking events and private celebrations.
 
 Capacity
-- Up to ${SEATED_CAPACITY} seated guests or ${p.maxGuestCapacity} standing guests. Standard line: "Our venue accommodates up to ${SEATED_CAPACITY} seated guests or ${p.maxGuestCapacity} standing guests."
-- ${SEATED_CAPACITY + 1}–${p.maxGuestCapacity} guests: ask whether the event is seated or standing (only standing works).
-- More than ${p.maxGuestCapacity} guests (LARGE EVENT): "Our Tropica space accommodates up to ${SEATED_CAPACITY} seated guests or ${p.maxGuestCapacity} standing guests. For a larger event, we can help explore partner venues that may accommodate your group." Collect details one at a time and hand off to the team (request_human_help). Never invent partner venue names, prices or availability. Never book it.
+- Up to ${Math.min(SEATED_CAPACITY, p.maxGuestCapacity)} guests seated, or up to ${p.maxGuestCapacity} guests standing (cocktail-style). Standard line: "Our venue accommodates up to ${Math.min(SEATED_CAPACITY, p.maxGuestCapacity)} guests seated or up to ${p.maxGuestCapacity} standing."
+- There is NO guest minimum — any group size up to capacity can book, at the same flat price.
+- More than ${p.maxGuestCapacity} guests (LARGE EVENT): "Our Tropica space accommodates up to ${p.maxGuestCapacity} guests. For a larger event, we can help explore partner venues that may accommodate your group." Collect details one at a time and hand off to the team (request_human_help). Never invent partner venue names, prices or availability. Never book it.
 
 Venue rental pricing (private venue, whole space)
-- $${p.perGuestPrice} per billable guest for the first ${INCLUDED_HOURS} hours. Minimum ${MIN_VENUE_GUESTS} billable guests = $${b10} minimum.
-- Total rental ${MIN_DURATION}–${MAX_DURATION} hours. Each additional venue hour after the first ${INCLUDED_HOURS} is $${p.extraHourPrice} (max 7 extra hours = $${7 * p.extraHourPrice}). This is the VENUE hour rate — not DJ or photography.
-- Formula: base = $${p.perGuestPrice} × max(guests, ${MIN_VENUE_GUESTS}); extra hours = total hours − ${INCLUDED_HOURS}; venue subtotal = base + extra hours × $${p.extraHourPrice}; plus any chosen add-ons with known prices.
-- Examples: 15 guests/5h = $750 · 15 guests/6h = $875 · 15 guests/7h = $1,000 · 15 guests/12h = $1,625 · 10 or fewer/12h = $1,375 · 20 guests = $1,000 · 25 seated = $1,250 · 30 standing = $1,500 (all 5h).
+- FLAT PRICE: ${money(base)} for the whole venue for the first ${INCLUDED_HOURS} hours, for any group size up to ${p.maxGuestCapacity} guests (seated or standing). The price does NOT change with the number of guests — never quote a per-person or per-guest price.
+- Total rental ${MIN_DURATION}–${MAX_DURATION} hours. Each additional venue hour after the first ${INCLUDED_HOURS} is $${p.extraHourPrice} (max 7 extra hours = ${money(7 * p.extraHourPrice)}). This is the VENUE hour rate — not DJ or photography.
+- Formula: venue subtotal = ${money(base)} + (total hours − ${INCLUDED_HOURS}) × $${p.extraHourPrice}; plus any chosen add-ons with known prices.
+- Examples (any guest count): 5h = ${money(base)} · 6h = ${money(base + p.extraHourPrice)} · 7h = ${money(base + 2 * p.extraHourPrice)} · 12h = ${money(base + 7 * p.extraHourPrice)}.
 - Minimum booking deposit: $${p.minDepositAmount}. It is PART of the amount due, not added on top, and not the full price. The remaining balance is due no later than 72 hours before the event.
-- Pricing line when guests are unknown: "Our venue starts at $${p.perGuestPrice} per guest for five hours, with a ${MIN_VENUE_GUESTS}-guest minimum ($${b10}). The minimum booking deposit is $${p.minDepositAmount}. You can request up to ${MAX_DURATION} total hours, and each additional hour after the first five costs $${p.extraHourPrice}. How many guests are you expecting?"
+- Pricing line: "Our venue is ${money(base)} for five hours for your whole group (up to ${p.maxGuestCapacity} guests). The minimum booking deposit is $${p.minDepositAmount}. You can request up to ${MAX_DURATION} total hours, and each additional hour after the first five costs $${p.extraHourPrice}. How many guests are you expecting?"
 - The 5-hour package includes two complimentary bottles of champagne, two TVs and one on-site helper.
 - Start times: on the hour from 10 AM to 11 PM; the event must end by ${LATEST_END_LABEL}.
-- Never quote the old $1,500 flat minimum. Never invent taxes, fees, refunds, payment deadlines or discounts. A quote is NOT a reservation and NOT proof the date is free.
+- Never quote the old $50-per-guest rate, the old $1,500 minimum or the old 10-guest minimum. Never invent taxes, fees, refunds, payment deadlines or discounts. A quote is NOT a reservation and NOT proof the date is free.
 
 Add-ons
 - DJ: $${p.djPrice} for up to five hours. "Yes! DJ service is available for $${p.djPrice} for up to five hours."

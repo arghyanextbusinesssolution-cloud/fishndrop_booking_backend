@@ -2,7 +2,8 @@ import crypto from "crypto";
 import logger from "../config/logger";
 import AiConversation, { AiInquiryStage, IAiConversation } from "../models/AiConversation";
 import { ChatMessage, ChatTool, groqChat, isGroqConfigured } from "./groq.client";
-import { buildKnowledge, CONTACT, getPricing, siteLinks, STANDING_CAPACITY } from "./knowledge";
+import { buildKnowledge, CONTACT, getPricing, SEATED_CAPACITY, siteLinks, STANDING_CAPACITY } from "./knowledge";
+import { DEFAULT_VENUE_BASE_PRICE } from "../models/SystemSettings";
 import { isValidYmd, normalizeTime, nyToday, prettyDate, to12h, upcomingCalendar, weekday } from "./dates";
 import {
   buildBookingLink,
@@ -465,13 +466,13 @@ SENDING THEM TO BOOK (you cannot book, reserve or take payment in the chat)
 - Never say you booked, reserved or held anything.
 `;
 
-const DM_BOOKING_RULES = (deposit: number) => `
+const DM_BOOKING_RULES = (deposit: number, base: number) => `
 - Once a slot is open and priced, offer: "Want me to book it for you now?" (or the website link if they prefer).
 
 BOOKING FOR THEM (private venue)
 - You CAN book: create_booking_hold reserves the slot for 30 minutes and gives a secure deposit link.
 - Before booking you need: date, start time, guests, duration (default 5h), full name (first + last), email and phone. Use CONTACT ON FILE when known; ask only for what's missing, one at a time.
-- Then send ONE short recap and ask for a yes, e.g. "Booking Sat, Dec 12, 8 PM–1 AM for 25 guests under Maria Lopez (maria@x.com, 917…). Total $1,250, $${deposit} deposit now. Shall I lock it in?" Only after a clear yes, call create_booking_hold.
+- Then send ONE short recap and ask for a yes, e.g. "Booking Sat, Dec 12, 8 PM–1 AM for 25 guests under Maria Lopez (maria@x.com, 917…). Total $${base.toLocaleString("en-US")}, $${deposit} deposit now. Shall I lock it in?" Only after a clear yes, call create_booking_hold.
 - After it succeeds: share the paymentUrl exactly as returned, say the slot is held for 30 minutes and the booking is confirmed as soon as the deposit is paid. Do NOT say it's confirmed yet.
 - If it fails because the slot was taken, apologise and offer the other open times (check again).
 - If BOOKING HOLD shows awaiting payment and they ask, re-share that same link (still valid until it expires). If it shows confirmed, congratulate them and give the booking number. If expired, offer to check the slot again and make a new hold.
@@ -486,14 +487,14 @@ BOOKING FOR THEM (private venue)
  */
 const CHAT_BOOKING_ENABLED = !DM_BOOKING_ENABLED && (process.env.AI_CHAT_BOOKING_ENABLED || "true").toLowerCase() !== "false";
 
-const CHAT_BOOKING_RULES = (p: { deposit: number; extra: number }) => `
+const CHAT_BOOKING_RULES = (p: { deposit: number; extra: number; base: number }) => `
 RESERVING THE VENUE IN THE CHAT (you CAN do this)
 1. Collect, ONE missing detail per message. Anything the customer already wrote counts as known — save it (save_details) and skip it; never re-ask.
-   Event details first: event date (month/day/year) → total guests (26–30: seated or standing? — 25 seated max, 30 standing max) → start time → TOTAL hours 5–12 ("Our rental includes five hours. How many total hours would you like, between five and twelve? Each additional hour is $${p.extra}.") → event type → offer DJ / photography / food (catering) once, after the first full quote (see OFFER THE EXTRAS ONCE).
+   Event details first: event date (month/day/year) → total guests (up to 25 seated, or up to 30 standing — over 25 is a standing event; there is no minimum) → start time → TOTAL hours 5–12 ("Our rental includes five hours. How many total hours would you like, between five and twelve? Each additional hour is $${p.extra}.") → event type → offer DJ / photography / food (catering) once, after the first full quote (see OFFER THE EXTRAS ONCE).
    Then, only once they want to reserve: ask ONLY for their full name (first + last). The phone number is already on file from the start of the chat — never ask for it again (only if PHONE ON FILE is "none", ask for it once).
    If they ask for the booking link at any point, share it right away and keep helping.
 2. Call check_booking with everything you have. If it's not available, say so kindly and offer the openStartTimes it returned (or find_open_venue_dates). Never offer times a tool didn't return.
-3. When available, send ONE recap and ask for a yes, e.g. "Here's your estimate for Sat, Dec 12, 8 PM–3 AM (7 hours): $50 per person × 15 guests = $750 for 5 hours, plus 2 extra hours × $${p.extra} = $250, so $1,000 total. A minimum $${p.deposit} deposit locks in your date. Shall I reserve it for you?" Mention unpriced catering/decor as quoted separately.
+3. When available, send ONE recap and ask for a yes, e.g. "Here's your estimate for Sat, Dec 12, 8 PM–3 AM (7 hours) for 15 guests: the venue is $${p.base.toLocaleString("en-US")} for 5 hours, plus 2 extra hours × $${p.extra} = $${(2 * p.extra).toLocaleString("en-US")}, so $${(p.base + 2 * p.extra).toLocaleString("en-US")} total. A minimum $${p.deposit} deposit locks in your date. Shall I reserve it for you?" Mention unpriced catering/decor as quoted separately.
    Then offer the choices: (1) I reserve it now and send your secure checkout link, (2) a Tropica support manager calls you, or (3) schedule a walkthrough first.
 4. Only after a clear YES → call create_booking_draft. Then send: the booking ID, the checkoutUrl exactly as returned, and that the date is held for 30 minutes — they verify their phone and pay the minimum $${p.deposit} deposit there to confirm. Never say it's booked or confirmed.
 5. If they change date/time/guests/hours after a draft: check_booking again, recap, and create a new draft on YES (the old hold is released automatically). If they cancel: cancel_booking_draft.
@@ -601,7 +602,7 @@ EXISTING BOOKING (this customer ALREADY booked through this chat — they are NO
 - Whenever you talk about their booking, balance or payment, end with this line (word for word): "${addOnLine(b)}"
 - Do NOT start a new reservation, re-quote the whole event, or ask "Shall I reserve it?" — their date is already booked.
 - Extras or changes (DJ, photography, more hours, more guests, catering, decor, new time): treat them as ADD-ONS / CHANGES to booking ${b.bookingId}.
-  Quote ONLY the extra amounts: DJ $300 (up to 5h) · photographer $300 for 2h (+$150/extra hour) · each extra venue hour $${extraHour} · each added guest $50. NEVER call get_price_quote and never re-price the whole event.
+  Quote ONLY the extra amounts: DJ $300 (up to 5h) · photographer $300 for 2h (+$150/extra hour) · each extra venue hour $${extraHour} · added guests are free (flat venue price) as long as the total stays within 30 guests (over 25 = standing). NEVER call get_price_quote and never re-price the whole event.
   If you give a new total, it is: current booking total $${b.total} + the extras they asked for (e.g. $${b.total} + $${extraHour} + $300 = $${b.total + extraHour + 300}). Example: "Adding a DJ to booking ${b.bookingId} is $300 (up to 5 hours). Want me to have our team add it to your booking?"
   Never say it's added — on a yes, call request_human_help with reason "Add <extra> ($<amount>) to booking ${b.bookingId}" (use the phone on file) and say the team will add it and update the balance.
   More hours / a different time: check_booking first to see if the venue is free longer, then hand off the same way.
@@ -668,15 +669,15 @@ OPENING — PHONE NUMBER FIRST
 - PHONE ON FILE known → never ask for the phone number again in this chat (booking, walkthrough, callback — use the one on file). Don't repeat the greeting later.
 
 HOW TO HELP
-- A group that wants the whole space → private venue rental (any size up to capacity; under 10 guests is billed as 10). Someone who only wants a table → check_table_availability.
+- A group that wants the whole space → private venue rental (any group up to 25 seated or 30 standing — no minimum, one flat price for the whole space). Someone who only wants a table → check_table_availability.
 - ALREADY BOOKED elsewhere (they say "I already booked / my booking / add a DJ to my party" and there's no EXISTING BOOKING): don't start a new reservation or ask "Shall I reserve it?". Quote just the extra if asked, and offer to have the team add it to their booking (request_human_help with what they want). You can't see bookings made outside this chat.
 - FOOD / MENU / CATERING questions: call get_catering_menu (with the cuisine or restaurant if they named one) and share the real menu — never invent dishes. A full menu may be longer than usual (sections on separate lines, dish names only). If they ask what a dish is, describe it from the menu's dishDetails.
 - CATERING REQUEST (a separate add-on from the venue booking), one step at a time: 1) restaurant → 2) dishes → 3) how many people each dish should serve (e.g. "fried chicken for 15 people") → 4) optional portion style: individual servings, half tray or full tray (offer once, never require) → 5) special instructions (dietary needs, allergies, serving time — optional). Call choose_catering after each answer (with ALL dishes so far) and confirm back in one line. Never say "platters".
 - CATERING PRICE ("how much is catering?", "price per person?"): answer it yourself — do NOT hand off to the team for this. Say: "Restaurants portion and price differently, so we don't list fixed catering prices. Once you've picked your dishes and how many people each should serve, our team confirms quantities, portions, availability and the total with the restaurant and sends you a separate catering quote by SMS or email to approve. It isn't part of today's deposit. Which dishes would you like?" Never invent a price or promise a portion size.
 - PRICE CHANGED (they add a DJ / photography, change hours or guests): call check_booking (or get_price_quote) again with the new details BEFORE replying and use its new customerLine — never add it up yourself.
-- HOW TO WRITE A QUOTE: use the tool's quote.customerLine wording (it already has the per-person math) — never shorten it to "5-hour base ($1,100)". Always show the per-person math — "$${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours" (under 10 guests: "${10}-guest minimum × $${pricing.perGuestPrice} = $${10 * pricing.perGuestPrice}"), then extra hours ("2 extra hours × $${pricing.extraHourPrice} = $250"), then the total and the minimum $${pricing.minDepositAmount} deposit (always say "minimum"). Example: "That's $${pricing.perGuestPrice} per person × 22 guests = $1,100 for 5 hours, plus 2 extra hours × $${pricing.extraHourPrice} = $250, so $1,350 total. A minimum $${pricing.minDepositAmount} deposit locks in your date; the remaining $1,050 is due 72 hours before the event."
+- HOW TO WRITE A QUOTE: use the tool's quote.customerLine wording. The venue is ONE FLAT PRICE — $${pricing.venueBasePrice.toLocaleString("en-US")} for 5 hours for the whole group (up to 25 seated or 30 standing); the guest count never changes it, so NEVER say "per person" or "per guest" or multiply by guests. Then extra hours ("2 extra hours × $${pricing.extraHourPrice} = $${2 * pricing.extraHourPrice}"), then the total and the minimum $${pricing.minDepositAmount} deposit (always say "minimum"). Example: "The venue is $${pricing.venueBasePrice.toLocaleString("en-US")} for 5 hours for your 22 guests, plus 2 extra hours × $${pricing.extraHourPrice} = $${2 * pricing.extraHourPrice}, so $${(pricing.venueBasePrice + 2 * pricing.extraHourPrice).toLocaleString("en-US")} total. A minimum $${pricing.minDepositAmount} deposit locks in your date; the remaining $${(pricing.venueBasePrice + 2 * pricing.extraHourPrice - pricing.minDepositAmount).toLocaleString("en-US")} is due 72 hours before the event."
 - OFFER THE EXTRAS ONCE: after the first full quote (guests + hours known), unless DJ / photography / food were already discussed, end that message with ONLY this offer (no reserve/callback/walkthrough choice in the same message — that comes in your next reply): "If you'd like, we can also arrange a DJ, photography or food for your event — just let me know!" Say it as a friendly optional offer, never as a required question. DJ $${pricing.djPrice} (up to 5h), photography $${pricing.photographerBasePrice} for 2h (+$${pricing.photographerExtraHourPrice}/extra hour), food: Jamaican, Mexican or Soul Food catering (quoted separately). If they say no, move on — never ask again.
-- HOURS + EXTRA-HOUR PRICE: whenever you quote while the customer hasn't said how many hours they want, always add that the price covers 5 hours and each extra hour is $${pricing.extraHourPrice} (up to 12 hours total) — and ask for the hours. If the start time is also missing, ask both in one line, e.g. "Wed, Dec 9 is available for 22 guests! The 5-hour rental is $1,100 with a minimum $300 deposit, and each extra hour is $${pricing.extraHourPrice} (up to 12 hours). What time would you like to start, and how many hours in total?"
+- HOURS + EXTRA-HOUR PRICE: whenever you quote while the customer hasn't said how many hours they want, always add that the price covers 5 hours and each extra hour is $${pricing.extraHourPrice} (up to 12 hours total) — and ask for the hours. If the start time is also missing, ask both in one line, e.g. "Wed, Dec 9 is available for 22 guests! The 5-hour rental is $${pricing.venueBasePrice.toLocaleString("en-US")} with a minimum $${pricing.minDepositAmount} deposit, and each extra hour is $${pricing.extraHourPrice} (up to 12 hours). What time would you like to start, and how many hours in total?"
 - PRICE QUESTIONS ("how much for 20 people with a DJ?"): answer right away with get_price_quote — price doesn't depend on the date, so never ask for a date before quoting. Assume 5 hours unless they said otherwise, then ask your next question.
 - As soon as you know a date, check it live (check_booking${CHAT_BOOKING_ENABLED ? "" : " / check_venue_availability"}). Quote prices with get_price_quote or check_booking — never do the math yourself.
 - "8" / "8 at night" = 20:00. Vague times ("evening") → show the open evening start times from the tool.
@@ -685,9 +686,9 @@ HOW TO HELP
 - Use save_details whenever they share a detail, and set lead_type (hot / warm / future) when their intent is clear.
 ${
     DM_BOOKING_ENABLED
-      ? DM_BOOKING_RULES(pricing.minDepositAmount)
+      ? DM_BOOKING_RULES(pricing.minDepositAmount, pricing.venueBasePrice)
       : CHAT_BOOKING_ENABLED
-        ? CHAT_BOOKING_RULES({ deposit: pricing.minDepositAmount, extra: pricing.extraHourPrice })
+        ? CHAT_BOOKING_RULES({ deposit: pricing.minDepositAmount, extra: pricing.extraHourPrice, base: pricing.venueBasePrice })
         : WEBSITE_BOOKING_RULES(pricing.minDepositAmount)
   }${WALKTHROUGH_RULES}
 TRUTH RULES (most important)
@@ -812,7 +813,7 @@ const runTool = async (name: string, rawArgs: string, st: TurnState): Promise<un
         rememberDetails(conv, { guests, duration_hours: args.duration_hours });
         const q = priceQuote(p, guests, Math.min(12, Math.max(5, Number(args.duration_hours) || 5)), Boolean(args.dj), Boolean(args.photographer), Math.max(2, Number(args.photographer_hours) || 2));
         const notes: string[] = [];
-        if (guests < 10) notes.push("Under the 10-guest minimum for a buyout — suggest a table reservation.");
+        if (guests > SEATED_CAPACITY && guests <= p.maxGuestCapacity) notes.push(`Over ${SEATED_CAPACITY} guests is a standing (cocktail-style) event.`);
         if (guests > p.maxGuestCapacity) notes.push(`Over the ${p.maxGuestCapacity}-guest capacity.`);
         if (!args.duration_hours && !conv.inquiry?.durationHours) notes.push(HOURS_REMINDER(p.extraHourPrice));
         return { ok: true, ...q, notes };
@@ -1461,12 +1462,12 @@ const crmPayload = (conv: IAiConversation) => {
     inquiryAddOns: [i.dj ? "DJ" : "", i.photographer ? `Photographer${i.photographerHours ? ` ${i.photographerHours}h` : ""}` : ""].filter(Boolean).join(", "),
     inquiryIntent: i.intent || "",
     leadType: i.leadType || "",
-    // Opportunity value: 5h base ($50 × max(guests,10)) + extra venue hours × $125; min $500; large events (>30) = 0
+    // Opportunity value: flat 5h venue price ($800) + extra venue hours × $125; large events (>25) = 0
     estimatedValue: (() => {
       const g = i.guests || 0;
       if (g > STANDING_CAPACITY) return 0;
       const extra = Math.max(0, (i.durationHours || 5) - 5);
-      return Math.max(500, 50 * Math.max(g, 10) + extra * 125);
+      return DEFAULT_VENUE_BASE_PRICE + extra * 125;
     })(),
     largeEvent: (i.guests || 0) > STANDING_CAPACITY ? "yes" : "no",
     chatBookingId: conv.draft?.code || "",

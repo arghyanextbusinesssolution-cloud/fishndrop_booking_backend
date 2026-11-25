@@ -4,7 +4,6 @@ import {
   getPricing,
   MAX_DURATION,
   MIN_DURATION,
-  MIN_VENUE_GUESTS,
   SEATED_CAPACITY,
   INCLUDED_HOURS,
   Pricing,
@@ -34,7 +33,7 @@ export interface Quote {
   total: number;
   deposit: number;
   balance: number;
-  /** Ready-to-send quote sentence with the $50-per-person math. */
+  /** Ready-to-send quote sentence (flat venue price + extra hours + add-ons). */
   customerLine: string;
   text: string;
 }
@@ -47,9 +46,9 @@ export const priceQuote = (
   photographer = false,
   photographerHours = 2
 ): Quote => {
-  // Minimum 10 billable guests → $500 minimum for the 5-hour base
-  const billableGuests = Math.max(guests, MIN_VENUE_GUESTS);
-  const base = billableGuests * p.perGuestPrice;
+  // Flat venue price for the first 5 hours — the guest count does not change it
+  const billableGuests = guests;
+  const base = p.venueBasePrice;
   const extraHours = Math.max(0, durationHours - INCLUDED_HOURS);
   const extraHoursCost = extraHours * p.extraHourPrice;
   const djCost = dj ? p.djPrice : 0;
@@ -59,11 +58,7 @@ export const priceQuote = (
   const total = base + extraHoursCost + djCost + photoCost;
   const deposit = Math.min(total, p.minDepositAmount);
   const usd = (n: number) => `$${n.toLocaleString("en-US")}`;
-  const parts = [
-    billableGuests > guests
-      ? `$${p.perGuestPrice} per person × ${MIN_VENUE_GUESTS}-guest minimum = ${usd(base)} for 5 hours`
-      : `$${p.perGuestPrice} per person × ${guests} guests = ${usd(base)} for 5 hours`
-  ];
+  const parts = [`The venue is ${usd(base)} for 5 hours${guests ? ` for your ${guests} guests` : ""}`];
   if (extraHours) parts.push(`${extraHours} extra hour${extraHours > 1 ? "s" : ""} × $${p.extraHourPrice} = ${usd(extraHoursCost)}`);
   if (djCost) parts.push(`DJ ${usd(djCost)}`);
   if (photoCost) parts.push(`photography (${photographerHours}h) ${usd(photoCost)}`);
@@ -81,7 +76,7 @@ export const priceQuote = (
     deposit,
     balance: total - deposit,
     customerLine,
-    text: `Say it to the customer like this (keep the per-person math): "${customerLine}" Catering and custom decor are quoted separately.`
+    text: `Say it to the customer like this (flat venue price — never per person): "${customerLine}" Catering and custom decor are quoted separately.`
   };
 };
 
@@ -125,12 +120,10 @@ export const checkVenueAvailability = async (args: {
   const guestNote = !guests
     ? undefined
     : tooBig
-      ? `Over Tropica's capacity (${SEATED_CAPACITY} seated / ${pricing.maxGuestCapacity} standing) — follow the Large Events process (partner venues + team follow-up). Do not book.`
-      : guests < MIN_VENUE_GUESTS
-        ? `Billed at the ${MIN_VENUE_GUESTS}-guest minimum ($${MIN_VENUE_GUESTS * pricing.perGuestPrice} for 5 hours).`
-        : guests > SEATED_CAPACITY
-          ? `${SEATED_CAPACITY + 1}-${pricing.maxGuestCapacity} guests only works standing — confirm the event will be standing.`
-          : undefined;
+      ? `Over Tropica's capacity (${pricing.maxGuestCapacity} guests) — follow the Large Events process (partner venues + team follow-up). Do not book.`
+      : guests > SEATED_CAPACITY
+        ? `${guests} guests is a STANDING (cocktail-style) event — the room seats ${SEATED_CAPACITY}; up to ${pricing.maxGuestCapacity} standing. Same flat price.`
+        : undefined;
 
   const open = await openVenueStarts(date, dur.hours);
   const openLabels = open.map((t) => `${to12h(t)}–${to12h(endTime(t, dur.hours))}`);

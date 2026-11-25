@@ -1,5 +1,5 @@
 import crypto from "crypto";
-import SystemSettings from "../../models/SystemSettings";
+import SystemSettings, { venueRentalCost } from "../../models/SystemSettings";
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import User from "../../models/User";
@@ -19,7 +19,8 @@ const LEAD_CONNECTOR_WEBHOOK_URL =
   process.env.LEAD_CONNECTOR_WEBHOOK_URL ||
   "https://services.leadconnectorhq.com/hooks/3HmJCw40C6xzJYaLg6cK/webhook-trigger/bc6da1e0-2155-4d01-a223-318afd60c723";
 
-export const MIN_PRIVATE_GUESTS = 10;
+/** No guest minimum — the venue is a flat price for any group that fits. */
+export const MIN_PRIVATE_GUESTS = 1;
 
 const PORTIONS = new Set(["individual", "half_tray", "full_tray"]);
 /** { dish: "half_tray" } — only known portion styles, dish names trimmed (no "." / "$" — Mongo map keys). */
@@ -65,9 +66,9 @@ export const getPrivateAvailability = async (req: Request, res: Response, next: 
     res.status(200).json({
       success: true,
       totalCapacity: settings.maxGuestCapacity || totalCapacity,
-      perGuestPrice: settings.perGuestPrice,
+      venueBasePrice: settings.venueBasePrice,
       settings: {
-        perGuestPrice: settings.perGuestPrice,
+        venueBasePrice: settings.venueBasePrice,
         maxGuestCapacity: settings.maxGuestCapacity,
         extraHourPrice: settings.extraHourPrice,
         djPrice: settings.djPrice,
@@ -106,7 +107,7 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
     if (!Number.isFinite(partySize) || partySize < MIN_PRIVATE_GUESTS) {
       res.status(400).json({
         success: false,
-        message: `Private venue bookings start at ${MIN_PRIVATE_GUESTS} guests`
+        message: `Please enter the number of guests`
       });
       return;
     }
@@ -186,10 +187,9 @@ export const createPrivateEventWithAccount = async (req: Request, res: Response,
 
     const { parsedDate } = buildDayRange(bookingDate);
     const allTables = await Table.find();
-    const perGuestRate = settings.perGuestPrice || 50;
-    const baseCost = partySize * perGuestRate;
+    // Flat venue price for the first 5 hours (any guest count up to capacity) + extra hours
+    const { base: baseCost, extraHoursCost } = venueRentalCost(settings, durationHours);
     const djCost = needDj ? (settings.djPrice ?? 300) : 0;
-    const extraHoursCost = durationHours > 5 ? (durationHours - 5) * (settings.extraHourPrice ?? 125) : 0;
     const photographerCost = needPhotographer ? (settings.photographerBasePrice ?? 300) + Math.max(0, photographerHours - 2) * (settings.photographerExtraHourPrice ?? 150) : 0;
     const totalAmount = baseCost + extraHoursCost + djCost + photographerCost;
     let currentAmount = totalAmount;

@@ -14,9 +14,11 @@ export interface ISystemSettings extends Document {
   platformFixedFee: number; // e.g. 0.00
   feeMode: "customer_paid" | "promoter_paid"; // whether fee is added on top or deducted from payout
 
-  // Private Venue Booking Per-Guest Pricing
-  perGuestPrice: number; // Default: $50 per guest
-  maxGuestCapacity: number; // Default: 30 guests (25 seated / 30 standing)
+  // Private Venue Booking Pricing — one flat price for the whole venue for the first 5 hours
+  venueBasePrice: number; // Default: $800 flat for 5 hours (any guest count up to capacity)
+  /** @deprecated Legacy per-guest rate ($50). No longer used for pricing; kept for history. */
+  perGuestPrice: number;
+  maxGuestCapacity: number; // Default and hard limit: 30 guests (25 seated, up to 30 standing)
 
   // Venue Add-on Rates
   djPrice: number; // Default: $300
@@ -35,7 +37,12 @@ export interface ISystemSettings extends Document {
   updatedAt: Date;
 }
 
-const CURRENT_PRICING_VERSION = 2;
+const CURRENT_PRICING_VERSION = 4;
+
+/** The room seats 25; up to 30 standing. No booking or setting may go above 30. */
+export const VENUE_SEATED_GUESTS = 25;
+export const VENUE_MAX_GUESTS = 30;
+export const DEFAULT_VENUE_BASE_PRICE = 800;
 
 const auditEntrySchema =new Schema<IAuditEntry>(
   {
@@ -54,8 +61,9 @@ const systemSettingsSchema = new Schema<ISystemSettings>(
     platformFixedFee: { type: Number, default: 0.0, min: 0 },
     feeMode: { type: String, enum: ["customer_paid", "promoter_paid"], default: "customer_paid" },
 
+    venueBasePrice: { type: Number, default: DEFAULT_VENUE_BASE_PRICE, min: 1 },
     perGuestPrice: { type: Number, default: 50, min: 1 },
-    maxGuestCapacity: { type: Number, default: 30, min: 1 },
+    maxGuestCapacity: { type: Number, default: VENUE_MAX_GUESTS, min: 1, max: VENUE_MAX_GUESTS },
 
     djPrice: { type: Number, default: 300, min: 0 },
     photographerBasePrice: { type: Number, default: 300, min: 0 },
@@ -80,8 +88,9 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
       platformFeePercent: 3.0,
       platformFixedFee: 0.0,
       feeMode: "customer_paid",
+      venueBasePrice: DEFAULT_VENUE_BASE_PRICE,
       perGuestPrice: 50,
-      maxGuestCapacity: 30,
+      maxGuestCapacity: VENUE_MAX_GUESTS,
       djPrice: 300,
       photographerBasePrice: 300,
       photographerExtraHourPrice: 150,
@@ -116,10 +125,58 @@ systemSettingsSchema.statics.getSettings = async function (): Promise<ISystemSet
         notes: "Venue minimum deposit updated from $200 to $300"
       });
     }
+    // v3: per-guest pricing replaced by a flat venue price ($800) for 5 hours; capacity was 25 seated
+    if ((settings.pricingVersion ?? 0) < 3) {
+      const changes: Record<string, { previous: any; current: any }> = {};
+      if (!settings.venueBasePrice) settings.venueBasePrice = DEFAULT_VENUE_BASE_PRICE;
+      changes.pricingModel = {
+        previous: `$${settings.perGuestPrice} per guest`,
+        current: `$${settings.venueBasePrice} flat for 5 hours`
+      };
+      if (!settings.maxGuestCapacity || settings.maxGuestCapacity > VENUE_MAX_GUESTS) {
+        changes.maxGuestCapacity = { previous: settings.maxGuestCapacity, current: VENUE_MAX_GUESTS };
+        settings.maxGuestCapacity = VENUE_MAX_GUESTS;
+      }
+      settings.auditHistory.push({
+        modifiedBy: "system",
+        modifiedByName: "System Migration",
+        modifiedAt: new Date(),
+        changes,
+        notes: `Venue pricing changed to a flat $${settings.venueBasePrice} for 5 hours; capacity ${VENUE_SEATED_GUESTS} seated`
+      });
+    }
+    // v4: standing option restored — 25 seated, up to 30 standing
+    if ((settings.pricingVersion ?? 0) < 4 && (!settings.maxGuestCapacity || settings.maxGuestCapacity === VENUE_SEATED_GUESTS)) {
+      const previous = settings.maxGuestCapacity;
+      settings.maxGuestCapacity = VENUE_MAX_GUESTS;
+      settings.auditHistory.push({
+        modifiedBy: "system",
+        modifiedByName: "System Migration",
+        modifiedAt: new Date(),
+        changes: { maxGuestCapacity: { previous, current: VENUE_MAX_GUESTS } },
+        notes: `Standing option restored: ${VENUE_SEATED_GUESTS} seated, up to ${VENUE_MAX_GUESTS} standing`
+      });
+    }
     settings.pricingVersion = CURRENT_PRICING_VERSION;
     await settings.save();
   }
+  // Never let a hand-edited value exceed the room
+  if (!settings.maxGuestCapacity || settings.maxGuestCapacity > VENUE_MAX_GUESTS) settings.maxGuestCapacity = VENUE_MAX_GUESTS;
+  if (!settings.venueBasePrice) settings.venueBasePrice = DEFAULT_VENUE_BASE_PRICE;
   return settings;
+};
+
+/**
+ * Venue rental before add-ons: one flat price for the first 5 hours + each extra hour.
+ * The guest count does not change the price (it only has to fit the room: 25 seated / 30 standing).
+ */
+export const venueRentalCost = (
+  s: { venueBasePrice?: number; extraHourPrice?: number },
+  durationHours: number
+): { base: number; extraHours: number; extraHoursCost: number } => {
+  const base = s.venueBasePrice || DEFAULT_VENUE_BASE_PRICE;
+  const extraHours = Math.max(0, durationHours - 5);
+  return { base, extraHours, extraHoursCost: extraHours * (s.extraHourPrice ?? 125) };
 };
 
 export interface ISystemSettingsModel extends Model<ISystemSettings> {
