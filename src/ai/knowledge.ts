@@ -31,8 +31,8 @@ export const STANDING_CAPACITY = 30;
 /** Fixed links from the Tropica AI master prompt (override in .env if they ever change). */
 export const EXTERNAL_LINKS = {
   walkthrough: process.env.AI_WALKTHROUGH_URL || "https://api.leadconnectorhq.com/widget/bookings/walk-through-calendar-2",
-  venuePhoto:
-    process.env.AI_VENUE_PHOTO_URL || "https://assets.cdn.filesafe.space/3HmJCw40C6xzJYaLg6cK/media/6ae20b37d1d68437cf84940e.jpeg",
+  /** Where the AI sends people who ask for photos, pictures or assets of the venue. */
+  gallery: process.env.AI_GALLERY_URL || "https://www.tropica.nyc/gallery/",
   partnerships: process.env.AI_PARTNERSHIP_URL || "https://sites.leadconnectorhq.com/preview/DD3E3pIVVr7o7QItcyHx"
 };
 
@@ -111,7 +111,7 @@ Links (send only the one that matches what they want — no footer on every mess
 - Book the venue / check event availability yourself: ${links.venue}
 - Schedule a WALKTHROUGH (tour / in-person visit): ${EXTERNAL_LINKS.walkthrough}
 - Table reservation: ${links.table} · Events & tickets: ${links.events} · Terms: ${links.terms}
-- Venue photo (when they ask for pictures, say "Of course! Here's a look inside Tropica Venue! ✨" and share): ${EXTERNAL_LINKS.venuePhoto}
+- Photos / pictures / assets / "what does it look like": always send the Tropica gallery link — say "Of course! Here's a look inside Tropica Venue! ✨" and share ${EXTERNAL_LINKS.gallery} . Never send a single image file or any other photo link.
 - Partnerships, sponsorships, vendor collaborations: ${EXTERNAL_LINKS.partnerships} (no venue booking for these).
 - The walkthrough calendar and the venue booking are DIFFERENT things: a walkthrough never reserves the venue, and walkthrough slots say nothing about event availability.
 

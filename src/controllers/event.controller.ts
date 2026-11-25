@@ -814,26 +814,32 @@ export const adminDeleteEvent = async (req: Request, res: Response, next: NextFu
       return;
     }
 
-    const paidOrders = await TicketOrder.countDocuments({ event: event._id, status: "paid" });
-    if (paidOrders > 0) {
+    // Admins may delete any event, even with sold tickets — but only after confirming it (?force=true).
+    // Paid orders are NOT refunded automatically; the admin refunds in Stripe if needed.
+    const force = String(req.query.force || "") === "true";
+    const paid = await TicketOrder.find({ event: event._id, status: "paid" }).select("totalAmount").lean();
+    if (paid.length > 0 && !force) {
+      const total = paid.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
       res.status(409).json({
         success: false,
-        message: `This event has ${paidOrders} paid ticket order${paidOrders === 1 ? "" : "s"}. Refund ${
-          paidOrders === 1 ? "it" : "them"
-        } first, or use Reject to take the event offline.`
+        requiresConfirmation: true,
+        paidOrders: paid.length,
+        paidTotal: Math.round(total * 100) / 100,
+        message: `This event has ${paid.length} paid ticket order${paid.length === 1 ? "" : "s"} ($${total.toFixed(2)}).`
       });
       return;
     }
 
-    const unpaidOrderIds = await TicketOrder.find({
-      event: event._id,
-      status: { $in: ["pending", "failed", "cancelled"] }
-    }).distinct("_id");
-    await Ticket.deleteMany({ event: event._id, status: { $ne: "refunded" } });
-    if (unpaidOrderIds.length) await TicketOrder.deleteMany({ _id: { $in: unpaidOrderIds } });
+    // Remove every ticket and order for the event so nothing points at a deleted event (QR codes stop working)
+    const [tickets, orders] = await Promise.all([
+      Ticket.deleteMany({ event: event._id }),
+      TicketOrder.deleteMany({ event: event._id })
+    ]);
     await event.deleteOne();
 
-    logger.info(`Event deleted by ${req.user?._id}: ${event.title} (${event._id})`);
+    logger.info(
+      `Event deleted by ${req.user?._id}: ${event.title} (${event._id}) — removed ${tickets.deletedCount} tickets, ${orders.deletedCount} orders (${paid.length} paid, not refunded)`
+    );
     res.status(200).json({ success: true, message: "Event deleted" });
   } catch (error: any) {
     next(new Error(`Failed to delete event: ${error.message}`));
