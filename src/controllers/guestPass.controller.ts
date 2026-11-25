@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import User from "../models/User";
 import { storeImage } from "../utils/flyer.utils";
 import MarketplaceBooking from "../models/MarketplaceBooking";
+import { calculateBookingFinancials } from "./financials.controller";
 import {
   MARKETPLACE_INVITABLE,
   ensureInvitationToken,
@@ -834,10 +835,20 @@ export const getAdminBookingOverview = async (req: Request, res: Response, next:
     const signedUp = approved.length + pending.length;
     const capacity = booking.partySize || 0;
 
+    // Money actually received (verified), not the planned deposit: an unpaid / auto-cancelled booking shows $0 paid
+    const fin = calculateBookingFinancials(booking as any);
+    const payment = {
+      paid: fin.collected,
+      remaining: fin.outstanding,
+      nothingPaid: fin.collected <= 0,
+      cancellationReason: booking.cancellationReason || null
+    };
+
     const baseUrl = getFrontendBaseUrl();
     res.status(200).json({
       success: true,
       booking,
+      payment,
       inviteLink: isPrivate && booking.invitationToken ? `${baseUrl}/invite/${booking.invitationToken}` : null,
       invitesActive: isInvitable(booking),
       stats: {

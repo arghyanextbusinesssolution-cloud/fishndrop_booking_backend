@@ -29,6 +29,7 @@ const releaseUnverifiedZelle = async (): Promise<number> => {
     {
       $set: {
         status: "cancelled",
+        cancellationReason: `No payment received: the Zelle payment was not verified within ${ZELLE_VERIFY_TIMEOUT_MINUTES} minutes of the screenshot.`,
         zelleReleasedAt: new Date(),
         zelleNotes: `Slot released: GHL did not verify the Zelle payment within ${ZELLE_VERIFY_TIMEOUT_MINUTES} minutes of the screenshot.`
       }
@@ -73,10 +74,24 @@ export const cleanupExpiredPendingBookings = async (): Promise<number> => {
     // Remove slot locks created for these expired bookings
     await SlotLock.deleteMany({ eventId: { $in: expiredIds } });
 
-    // Mark expired bookings as cancelled
+    // Mark expired bookings as cancelled, saying why (nothing was paid)
     await Booking.updateMany(
-      { _id: { $in: expiredIds } },
-      { $set: { status: "cancelled" } }
+      { _id: { $in: expiredIds }, paymentMethod: "zelle" },
+      {
+        $set: {
+          status: "cancelled",
+          cancellationReason: `No payment received: no Zelle screenshot was submitted within ${PENDING_HOLD_TIMEOUT_MINUTES} minutes.`
+        }
+      }
+    );
+    await Booking.updateMany(
+      { _id: { $in: expiredIds }, paymentMethod: { $ne: "zelle" } },
+      {
+        $set: {
+          status: "cancelled",
+          cancellationReason: `No payment received: the card checkout was not completed within ${PENDING_HOLD_TIMEOUT_MINUTES} minutes.`
+        }
+      }
     );
 
     return expiredIds.length + releasedZelle;
