@@ -4,7 +4,7 @@ import logger from "../config/logger";
 import AiConversation from "../models/AiConversation";
 import { processInboundMessage, recordStaffMessage, setAiPaused } from "../ai/assistant.service";
 import { checkTableAvailability, checkVenueAvailability, findOpenVenueDates } from "../ai/availability";
-import { hasGhlApi, sendReplyToWebhook, sendSocialReply } from "../ai/ghlMessaging";
+import { hasGhlApi, lookupContactChannel, sendReplyToWebhook, sendSocialReply } from "../ai/ghlMessaging";
 import { bookingRef, checkAiHoldPayment } from "../ai/aiBooking";
 import Booking from "../models/Booking";
 import { checkDraft, createDraft, getPublicDraft } from "../ai/aiDraft";
@@ -49,12 +49,20 @@ const parseInbound = (body: any) => {
   const custom = body.customData || body.custom_data || {};
   const contactId = pick(body.contactId, body.contact_id, custom.contactId, body.contact?.id);
   const text = pick(typeof body.message === "string" ? body.message : "", msg.body, body.body, body.text, custom.message);
-  const rawChannel = pick(body.channel, custom.channel, msg.type, body.messageType, body.type, body.source).toLowerCase();
-  const channel = /insta|^ig$|type_instagram/.test(rawChannel)
+  // Every field GHL may use for the app the customer wrote on (numbers are ignored — their meaning isn't documented)
+  const rawChannel = [
+    body.channel, custom.channel, msg.type, msg.messageType, body.messageType, body.message_type,
+    body.type, body.source, body.contact?.lastMessageType, custom.messageType
+  ]
+    .filter((v) => typeof v === "string" && v.trim())
+    .join(" ")
+    .toLowerCase();
+  // "" = unknown → resolved in ghlInboundMessage (never silently treated as Instagram)
+  const channel = /insta|\big\b|type_instagram/.test(rawChannel)
     ? "instagram"
-    : /face|messenger|^fb$|type_facebook/.test(rawChannel)
+    : /face|messenger|\bfb\b|type_facebook/.test(rawChannel)
       ? "facebook"
-      : rawChannel || "instagram";
+      : "";
   const direction = pick(body.direction, msg.direction, custom.direction).toLowerCase();
   return {
     contactId,
@@ -81,6 +89,14 @@ export const ghlInboundMessage = async (req: Request, res: Response, next: NextF
     if (m.direction === "outbound") {
       res.json({ success: true, status: "ignored", reply: null });
       return;
+    }
+
+    // Channel not in the webhook → ask GHL (newest conversation), then this chat's saved channel, then Instagram
+    if (!m.channel) {
+      const fromGhl = await lookupContactChannel(m.contactId);
+      const saved = fromGhl ? null : await AiConversation.findOne({ contactId: m.contactId }).select("channel").lean();
+      m.channel = fromGhl || (saved?.channel === "facebook" || saved?.channel === "instagram" ? saved.channel : "") || "instagram";
+      console.log(`[AI] Channel not in webhook → ${m.channel} (${fromGhl ? "from GHL conversation" : saved ? "saved chat" : "default"})`);
     }
 
     const mode = String(req.query.mode || process.env.AI_REPLY_MODE || "webhook").toLowerCase();
@@ -112,7 +128,7 @@ export const ghlInboundMessage = async (req: Request, res: Response, next: NextF
           console.log(`[AI] 📝 Notes:\n${r.notes || "-"}`);
           console.log(`[AI] 💬 Reply: ${r.reply ?? "(no reply — " + r.status + ")"}`);
           console.log(`[AI] Delivered to GHL: ${delivered ? "YES" : "NO"} (mode=${mode})\n`);
-          logger.info("[AI] handled", { contactId: m.contactId, status: r.status, stage: r.stage, tools: r.toolsUsed, delivered, mode });
+          logger.info("[AI] handled", { contactId: m.contactId, channel: m.channel, status: r.status, stage: r.stage, tools: r.toolsUsed, delivered, mode });
         })
         .catch((err) => logger.error("[AI] async handle failed", { error: err?.message }));
       return;

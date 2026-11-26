@@ -1162,8 +1162,11 @@ const messageKey = (m: InboundMessage) =>
 
 /** Atomically records the message id. Returns null if this message was already processed. */
 const claimMessage = async (m: InboundMessage, key: string): Promise<IAiConversation | null> => {
-  const setOnInsert: Record<string, unknown> = { channel: m.channel, stage: "new", aiPaused: false };
+  const setOnInsert: Record<string, unknown> = { stage: "new", aiPaused: false };
   const set: Record<string, unknown> = { lastInboundAt: new Date() };
+  // Follow the app the customer wrote on most recently (Facebook ↔ Instagram), so every later message goes there too
+  if (m.channel === "facebook" || m.channel === "instagram") set.channel = m.channel;
+  else setOnInsert.channel = m.channel || "instagram";
   if (m.contactName) set.contactName = m.contactName;
   if (m.contactEmail && m.contactEmail.includes("@")) set.contactEmail = m.contactEmail.toLowerCase();
   if (m.contactPhone && m.contactPhone.replace(/\D/g, "").length >= 10) set.contactPhone = m.contactPhone;

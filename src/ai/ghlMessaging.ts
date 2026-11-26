@@ -41,6 +41,40 @@ export const ghlMessageType = (channel: string): "IG" | "FB" | null => {
   return null;
 };
 
+/**
+ * When the webhook doesn't say which app the customer wrote on, ask GHL: the contact's most recent
+ * conversation tells us if the last message was Facebook or Instagram. Returns null if unknown.
+ */
+export const lookupContactChannel = async (contactId: string): Promise<"facebook" | "instagram" | null> => {
+  if (!hasGhlApi() || !contactId) return null;
+  try {
+    const url = new URL(`${API}/conversations/search`);
+    url.searchParams.set("contactId", contactId);
+    if (process.env.GHL_LOCATION_ID?.trim()) url.searchParams.set("locationId", process.env.GHL_LOCATION_ID.trim());
+    url.searchParams.set("limit", "5");
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${process.env.GHL_API_TOKEN?.trim()}`, Version: "2021-04-15", Accept: "application/json" }
+    });
+    if (!res.ok) {
+      console.log(`[AI] ⚠️ Channel lookup failed: HTTP ${res.status}`);
+      return null;
+    }
+    const data: any = await res.json();
+    const convs: any[] = Array.isArray(data?.conversations) ? data.conversations : [];
+    // Newest first; look at the last message type of each conversation
+    convs.sort((a, b) => Number(b.lastMessageDate || 0) - Number(a.lastMessageDate || 0));
+    for (const c of convs) {
+      const t = String(c.lastMessageType || c.type || "").toUpperCase();
+      if (t.includes("FACEBOOK") || t === "FB") return "facebook";
+      if (t.includes("INSTAGRAM") || t === "IG") return "instagram";
+    }
+    return null;
+  } catch (err: any) {
+    console.log("[AI] ⚠️ Channel lookup error:", err?.message);
+    return null;
+  }
+};
+
 /** Instagram / Messenger cap a DM at ~1000 characters — long replies (e.g. two menus) go out as several messages. */
 const MAX_DM = 950;
 export const splitForDm = (text: string, max = MAX_DM): string[] => {
